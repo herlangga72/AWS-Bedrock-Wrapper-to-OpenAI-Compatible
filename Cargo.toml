@@ -16,5 +16,8 @@ aws-sdk-bedrockruntime = "1"
 async-stream = "0.3"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+futures = "0.1"
+reqwest = { version = "0.13", features = ["blocking"] }
