@@ -27,7 +27,7 @@ impl ClickHouseLogger {
                 // Prevent broken connections from hanging indefinitely
                 .timeout(std::time::Duration::from_secs(5)) 
                 .build()
-                .unwrap_or_default(),
+                .expect("Failed to build reqwest::Client for ClickHouseLogger"),
         }
     }
 

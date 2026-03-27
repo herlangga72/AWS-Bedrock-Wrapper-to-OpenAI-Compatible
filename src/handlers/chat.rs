@@ -143,8 +143,8 @@ fn stream_converse(
                 "model": model_name,
                 "choices": [], 
                 "usage": {
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": completion_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
                     "total_tokens": prompt_tokens + completion_tokens
                 }
             });
@@ -178,14 +178,18 @@ async fn non_stream(
 
     let resp = match result {
         Ok(r) => r,
-        Err(e) => return error(&e.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            eprintln!("Bedrock converse error: {}", e);
+            return error("Upstream service error", StatusCode::BAD_GATEWAY);
+        }
     };
 
-    let usage = resp.usage.expect("Usage data missing from Bedrock response");
-    
-    // Extract prompt and completion counts
-    let prompt_tokens = usage.input_tokens as u32;
-    let completion_tokens = usage.output_tokens as u32;
+    // Handle possible absence of usage data without panicking
+    let (prompt_tokens, completion_tokens) = if let Some(usage) = resp.usage {
+        (usage.input_tokens as u32, usage.output_tokens as u32)
+    } else {
+        (0, 0)
+    };
     let total_tokens = prompt_tokens + completion_tokens;
 
     // Extract the content string safely
@@ -224,8 +228,8 @@ async fn non_stream(
             "finish_reason": "stop"
         }],
         "usage": {
-            "input_tokens": prompt_tokens,
-            "output_tokens": completion_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
             "total_tokens": total_tokens
         }
     })).into_response()
