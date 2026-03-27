@@ -11,7 +11,7 @@ use aws_sdk_bedrockruntime::{
     types::{ContentBlock, ConversationRole, Message as BedrockMessage, ContentBlockDelta},
     Client as RuntimeClient,
 };
-use futures_util::Stream; // Removed StreamExt as it was unused
+use futures_util::Stream;
 use serde_json::json;
 use std::{convert::Infallible, time::Duration};
 use tokio::time::timeout;
@@ -87,7 +87,8 @@ fn stream_converse(
             }
         };
 
-        let mut final_usage = (0u32, 0u32); 
+        let mut prompt_tokens = 0u32;
+        let mut completion_tokens = 0u32;
 
         while let Ok(Some(event)) = resp.stream.recv().await {
             use aws_sdk_bedrockruntime::types::ConverseStreamOutput as Out;
@@ -111,7 +112,8 @@ fn stream_converse(
                 }
                 Out::Metadata(metadata) => {
                     if let Some(usage) = metadata.usage {
-                        final_usage = (usage.input_tokens as u32, usage.output_tokens as u32);
+                        prompt_tokens = usage.input_tokens as u32;
+                        completion_tokens = usage.output_tokens as u32;
                     }
                 }
                 Out::MessageStop(stop) => {
@@ -131,25 +133,23 @@ fn stream_converse(
             }
         }
 
-        // Log the real numbers from Bedrock
-        logger.log_usage(&user_email, &model_name, final_usage.0, final_usage.1);
+        logger.log_usage(&user_email, &model_name, prompt_tokens, completion_tokens);
         
-        // --- NEW CODE: Send the usage chunk to OpenWebUI ---
-        if final_usage.0 > 0 || final_usage.1 > 0 {
+        if prompt_tokens > 0 || completion_tokens > 0 {
             let usage_chunk = json!({
                 "id": request_id,
                 "object": "chat.completion.chunk",
                 "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 "model": model_name,
-                "choices": [], // Must be empty per OpenAI spec for usage chunks
+                "choices": [], 
                 "usage": {
-                    "prompt_tokens": final_usage.0,
-                    "completion_tokens": final_usage.1
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens
                 }
             });
             yield Ok(Event::default().data(usage_chunk.to_string()));
         }
-        // ---------------------------------------------------
 
         yield Ok(Event::default().data("[DONE]"));
     }
@@ -183,17 +183,20 @@ async fn non_stream(
 
     let usage = resp.usage.expect("Usage data missing from Bedrock response");
     
-    // FIX FOR E0515: Extract the string by consuming the Message instead of borrowing it.
+    // Extract prompt and completion counts
+    let prompt_tokens = usage.input_tokens as u32;
+    let completion_tokens = usage.output_tokens as u32;
+    let total_tokens = prompt_tokens + completion_tokens;
+
+    // Extract the content string safely
     let content_str = resp.output
         .and_then(|o| {
-            // Check if the output is a Message
             match o {
                 aws_sdk_bedrockruntime::types::ConverseOutput::Message(m) => Some(m),
                 _ => None,
             }
         })
         .and_then(|m| {
-            // Take ownership of the first content block and extract text
             m.content.into_iter().next().and_then(|c| {
                 if let ContentBlock::Text(t) = c { Some(t) } else { None }
             })
@@ -203,22 +206,27 @@ async fn non_stream(
     logger.log_usage(
         &user_email, 
         &req.model, 
-        usage.input_tokens as u32, 
-        usage.output_tokens as u32
+        prompt_tokens, 
+        completion_tokens
     );
 
     Json(json!({
-        "id": Uuid::new_v4(),
+        "id": format!("chatcmpl-{}", Uuid::new_v4()),
         "object": "chat.completion",
+        "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
         "model": req.model,
         "choices": [{
             "index": 0,
-            "message": { "role": "assistant", "content": content_str },
+            "message": { 
+                "role": "assistant", 
+                "content": content_str 
+            },
             "finish_reason": "stop"
         }],
         "usage": {
-            "prompt_tokens": usage.input_tokens,
-            "completion_tokens": usage.output_tokens
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": total_tokens
         }
     })).into_response()
 }
@@ -235,9 +243,6 @@ pub async fn list_models_handler(State(state): State<crate::AppState>) -> AxumRe
                 .into_iter()
                 .map(|m| {
                     crate::models::ModelData {
-                        // Just use the value directly, or use .unwrap_or_default() 
-                        // ONLY if your SDK version actually returns an Option.
-                        // Based on your error, it's already a String:
                         id: m.model_id, 
                         object: "model".into(),
                         created: 0,
