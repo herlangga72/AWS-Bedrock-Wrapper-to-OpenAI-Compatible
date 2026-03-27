@@ -236,38 +236,6 @@ async fn non_stream(
 }
 
 // =======================
-// LIST MODELS HANDLER
-// =======================
-pub async fn list_models_handler(State(state): State<crate::AppState>) -> AxumResponse {
-    match state.mgmt_client.list_foundation_models().send().await {
-        Ok(resp) => {
-            let data: Vec<crate::models::ModelData> = resp
-                .model_summaries
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| {
-                    crate::models::ModelData {
-                        id: m.model_id, 
-                        object: "model".into(),
-                        created: 0,
-                        owned_by: m.provider_name.unwrap_or_else(|| "bedrock".into()),
-                    }
-                })
-                .collect();
-            
-            Json(crate::models::ModelList {
-                object: "list".into(),
-                data,
-            }).into_response()
-        }
-        Err(e) => {
-            tracing::error!("Failed to list models: {:?}", e);
-            Json(json!({"object": "list", "data": []})).into_response()
-        }
-    }
-}
-
-// =======================
 // HELPERS
 // =======================
 fn error(msg: &str, code: StatusCode) -> AxumResponse {
