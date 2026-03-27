@@ -1,8 +1,10 @@
+# Helper script for contributors: add common dependencies for the async logger setup
+
 # Add Axum headers support
 cargo add axum-extra --features "typed-header"
 
-# Add Reqwest with blocking support (needed for your logger)
-cargo add reqwest --features "blocking"
+# Add async Reqwest client (matches logger's async reqwest::Client usage)
+cargo add reqwest
 
 # Add Utilities for streams and async operations
 cargo add futures-util
