@@ -5,6 +5,7 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub stream: Option<bool>,
+    pub max_tokens: Option<usize>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -18,7 +19,7 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ModelData {
     pub id: String,
     pub object: String,
