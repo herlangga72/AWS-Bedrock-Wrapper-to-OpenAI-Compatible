@@ -110,6 +110,27 @@ print(response.choices[0].message.content)
 | Efficiency        | Context Compression  | Algorithmic pruning of prompts to minimize token expenditure on long-form context. |
 | Security          | JWT Authentication   | Implementation of secure, multi-tenant API key management.                         |
 
+---
+
+## Testing
+
+The test suite requires no live AWS credentials — all tests that touch the HTTP layer exit before reaching the provider.
+
+```bash
+cargo test
+```
+
+| Scope | Location | Coverage |
+| :--- | :--- | :--- |
+| `Config::addr()` | `src/config.rs` | host + port formatting |
+| `NoopCompactor` | `src/types/compactor.rs` | passthrough, order, empty input |
+| Wire types (serde) | `src/types/openai.rs` | `ChatRequest` / `Message` / `ModelData` / `ModelList` |
+| `ProviderError` | `src/provider/mod.rs` | `Display` for both variants |
+| `ProviderRegistry::provider_for` | `src/provider/registry.rs` | model-prefix routing |
+| `extract_user_email` | `src/middleware.rs` | auth accept / reject / email header |
+| `ClickHouseLogger::log_usage` | `src/logging.rs` | fire-and-forget error handling |
+| HTTP layer | `src/router.rs` | 401 on bad auth, 400 on bad JSON |
+
 
 ## Contribution and License
 Contributions regarding security hardening and context management are prioritized. This software is released under the MIT License.
