@@ -39,3 +39,48 @@ impl ProviderRegistry {
         models
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::bedrock::test_provider;
+
+    fn make_registry() -> ProviderRegistry {
+        ProviderRegistry::new(test_provider())
+    }
+
+    #[test]
+    fn bare_model_routes_to_bedrock_unchanged() {
+        let (kind, id) = make_registry().provider_for("my-model");
+        assert!(matches!(kind, crate::provider::ProviderKind::Bedrock));
+        assert_eq!(id, "my-model");
+    }
+
+    #[test]
+    fn bedrock_prefix_is_stripped() {
+        let (kind, id) = make_registry().provider_for("bedrock/anthropic.claude-3");
+        assert!(matches!(kind, crate::provider::ProviderKind::Bedrock));
+        assert_eq!(id, "anthropic.claude-3");
+    }
+
+    #[test]
+    fn extra_slashes_in_model_id_are_preserved() {
+        // splitn(2, '/') only strips the first segment so inner slashes survive.
+        let (_, id) = make_registry().provider_for("bedrock/us.anthropic.claude-3/v1");
+        assert_eq!(id, "us.anthropic.claude-3/v1");
+    }
+
+    #[test]
+    fn model_without_prefix_slash_routes_to_bedrock() {
+        let (kind, id) = make_registry().provider_for("amazon.titan-text-express-v1");
+        assert!(matches!(kind, crate::provider::ProviderKind::Bedrock));
+        assert_eq!(id, "amazon.titan-text-express-v1");
+    }
+
+    #[test]
+    fn empty_model_string_routes_to_bedrock() {
+        let (kind, id) = make_registry().provider_for("");
+        assert!(matches!(kind, crate::provider::ProviderKind::Bedrock));
+        assert_eq!(id, "");
+    }
+}

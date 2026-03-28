@@ -26,3 +26,33 @@ impl Config {
         format!("{}:{}", self.server_host, self.server_port)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_config(host: &str, port: &str) -> Config {
+        Config {
+            aws_region: "us-east-1".into(),
+            api_key: "key".into(),
+            clickhouse_url: "http://localhost".into(),
+            server_host: host.into(),
+            server_port: port.into(),
+        }
+    }
+
+    #[test]
+    fn addr_combines_host_and_port() {
+        assert_eq!(make_config("0.0.0.0", "3001").addr(), "0.0.0.0:3001");
+    }
+
+    #[test]
+    fn addr_with_localhost() {
+        assert_eq!(make_config("127.0.0.1", "8080").addr(), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn addr_with_ipv6() {
+        assert_eq!(make_config("::1", "9000").addr(), "::1:9000");
+    }
+}

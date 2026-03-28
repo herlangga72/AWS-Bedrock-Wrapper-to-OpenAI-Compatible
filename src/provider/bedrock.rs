@@ -201,3 +201,24 @@ fn now_secs() -> u64 {
         .unwrap()
         .as_secs()
 }
+
+/// Build a `BedrockProvider` backed by dummy SDK clients for use in tests.
+///
+/// The clients have a region set but no credentials or real endpoint — they
+/// will never be invoked in tests that exercise the auth or routing layers.
+#[cfg(test)]
+pub fn test_provider() -> BedrockProvider {
+    let rt_conf = aws_sdk_bedrockruntime::config::Builder::new()
+        .behavior_version(aws_sdk_bedrockruntime::config::BehaviorVersion::latest())
+        .region(aws_sdk_bedrockruntime::config::Region::new("us-east-1"))
+        .build();
+    let runtime = aws_sdk_bedrockruntime::Client::from_conf(rt_conf);
+
+    let mgmt_conf = aws_sdk_bedrock::config::Builder::new()
+        .behavior_version(aws_sdk_bedrock::config::BehaviorVersion::latest())
+        .region(aws_sdk_bedrock::config::Region::new("us-east-1"))
+        .build();
+    let mgmt = aws_sdk_bedrock::Client::from_conf(mgmt_conf);
+
+    BedrockProvider::new(runtime, mgmt)
+}

@@ -64,3 +64,29 @@ impl ClickHouseLogger {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::time::{sleep, Duration};
+
+    #[tokio::test]
+    async fn log_usage_does_not_panic_with_unreachable_url() {
+        // The background task will fail to connect, but log_usage itself must
+        // return instantly without panicking. We wait briefly to let the
+        // spawned task run through its error path.
+        let logger = ClickHouseLogger::new("http://127.0.0.1:0");
+        logger.log_usage("user@example.com", "bedrock/claude", 100, 50);
+        // Give the spawned task time to complete (it will hit a connection error).
+        sleep(Duration::from_millis(200)).await;
+        // If we reach here without panicking the error path is handled correctly.
+    }
+
+    #[tokio::test]
+    async fn log_usage_accepts_zero_token_counts() {
+        let logger = ClickHouseLogger::new("http://127.0.0.1:0");
+        // Must not panic even with zero values.
+        logger.log_usage("", "", 0, 0);
+        sleep(Duration::from_millis(200)).await;
+    }
+}
