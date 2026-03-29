@@ -47,7 +47,7 @@ pub async fn chat_handler(
 
     let stream_flag = req.stream.unwrap_or(true);
     
-    println!("Received chat request for model: {}, stream: {}, user_email: {}", req.model, stream_flag, user_email);
+    println!("Received chat request for model: {}, stream: {}", req.model, stream_flag);
     
     if stream_flag {
         let s = stream_converse(state.client.clone(), req, state.logger.clone(), user_email);
