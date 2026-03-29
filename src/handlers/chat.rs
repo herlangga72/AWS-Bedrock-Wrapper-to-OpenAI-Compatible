@@ -1,4 +1,4 @@
-use crate::models::{ChatRequest, ErrorResponse}; // Fixed: Added Message and ChatRequest
+use crate::models::{ChatRequest, ErrorResponse}; // Fixed: Added ChatRequest import
 use crate::handlers::{  
     logger::ClickHouseLogger, 
     message::build_bedrock_payload,
