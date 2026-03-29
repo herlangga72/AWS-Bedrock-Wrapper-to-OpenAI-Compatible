@@ -1,5 +1,9 @@
-use crate::models::{ChatRequest, Message, ErrorResponse};
-use crate::handlers::logger::ClickHouseLogger;
+use crate::models::{ChatRequest, ErrorResponse}; // Fixed: Added ChatRequest import
+use crate::handlers::{  
+    logger::ClickHouseLogger, 
+    message::build_bedrock_payload,
+};
+
 use axum::{
     extract::State,
     http::{StatusCode, HeaderMap},
@@ -8,7 +12,7 @@ use axum::{
 };
 use axum_extra::{TypedHeader, headers::{authorization::Bearer, Authorization}};
 use aws_sdk_bedrockruntime::{
-    types::{ContentBlock, ConversationRole, Message as BedrockMessage, ContentBlockDelta},
+    types::{ContentBlock, ContentBlockDelta},
     Client as RuntimeClient,
 };
 use futures_util::Stream;
@@ -27,21 +31,24 @@ pub async fn chat_handler(
     Json(req): Json<ChatRequest>, 
 ) -> AxumResponse {
     // Validate API key
-    let user_email = match auth {
+    match auth {
         Some(TypedHeader(auth_header)) => {
             if auth_header.token() != state.api_key {
                 return error("invalid api key", StatusCode::UNAUTHORIZED);
             }
-            headers.get("x-openwebui-user-email")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("anonymous")
-                .to_string()
         }
         None => return error("missing authorization", StatusCode::UNAUTHORIZED),
     };
 
-    let stream_flag = req.stream.unwrap_or(false);
+    let user_email = headers.get("x-openwebui-user-email")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("anonymous")
+                    .to_string();
 
+    let stream_flag = req.stream.unwrap_or(true);
+    
+    println!("Received chat request for model: {}, stream: {}", req.model, stream_flag);
+    
     if stream_flag {
         let s = stream_converse(state.client.clone(), req, state.logger.clone(), user_email);
         Sse::new(s).keep_alive(KeepAlive::default()).into_response()
@@ -55,7 +62,7 @@ pub async fn chat_handler(
 // =======================
 fn stream_converse(
     client: RuntimeClient,
-    mut req: ChatRequest,
+    req: ChatRequest,
     logger: ClickHouseLogger,
     user_email: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
@@ -64,25 +71,26 @@ fn stream_converse(
     let model_name = req.model.clone();
 
     async_stream::stream! {
-        let messages = std::mem::take(&mut req.messages);
-        let bedrock_messages = convert_messages_owned(messages);
+        let payload = build_bedrock_payload(req);
 
-        let stream_res = timeout(
+        let sdk_result = timeout(
             Duration::from_secs(60),
             client.converse_stream()
                 .model_id(&model_id)
-                .set_messages(Some(bedrock_messages)) 
+                .set_messages(Some(payload.messages))
+                .set_system(payload.system)
+                .inference_config(payload.inference_config)
                 .send()
         ).await;
 
-        let mut resp = match stream_res {
+        let mut resp = match sdk_result {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
                 yield Ok(Event::default().data(json!({"error": e.to_string()}).to_string()));
                 return;
             }
             Err(_) => {
-                yield Ok(Event::default().data(r#"{"error":"stream timeout"}"#));
+                yield Ok(Event::default().data(json!({"error": "stream timeout"}).to_string()));
                 return;
             }
         };
@@ -99,7 +107,7 @@ fn stream_converse(
                         let chunk = json!({
                             "id": request_id,
                             "object": "chat.completion.chunk",
-                            "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                            "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
                             "model": model_name,
                             "choices": [{
                                 "index": 0,
@@ -124,7 +132,7 @@ fn stream_converse(
                         "choices": [{
                             "index": 0,
                             "delta": {},
-                            "finish_reason": format!("{:?}", stop.stop_reason)
+                            "finish_reason": format!("{:?}", stop.stop_reason).to_lowercase()
                         }]
                     });
                     yield Ok(Event::default().data(last_chunk.to_string()));
@@ -139,12 +147,11 @@ fn stream_converse(
             let usage_chunk = json!({
                 "id": request_id,
                 "object": "chat.completion.chunk",
-                "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 "model": model_name,
                 "choices": [], 
                 "usage": {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
                     "total_tokens": prompt_tokens + completion_tokens
                 }
             });
@@ -155,44 +162,45 @@ fn stream_converse(
     }
 }
 
-
 // =======================
 // NON-STREAM MODE
 // =======================
 async fn non_stream(
     client: RuntimeClient,
-    mut req: ChatRequest,
+    req: ChatRequest,
     logger: ClickHouseLogger,
     user_email: String,
 ) -> AxumResponse {
     let model_id = req.model.replace("bedrock/", "");
-    let messages = std::mem::take(&mut req.messages);
-    let bedrock_messages = convert_messages_owned(messages);
-    
-    let result = client
-        .converse()
-        .model_id(model_id)
-        .set_messages(Some(bedrock_messages))
-        .send()
-        .await;
+    let model_name = req.model.clone();
+    let payload = build_bedrock_payload(req);
 
-    let resp = match result {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Bedrock converse error: {}", e);
-            return error("Upstream service error", StatusCode::BAD_GATEWAY);
+    let sdk_result = timeout(
+        Duration::from_secs(60),
+        client.converse()
+            .model_id(&model_id)
+            .set_messages(Some(payload.messages))
+            .set_system(payload.system)
+            .inference_config(payload.inference_config)
+            .send()
+    ).await;
+
+    // Fixed: Properly unwrap the nested Result (Timeout -> SDK Result -> Output)
+    let resp = match sdk_result {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            eprintln!("Bedrock SDK error: {}", e);
+            return error("Bedrock service error", StatusCode::BAD_GATEWAY);
         }
+        Err(_) => return error("Upstream timeout", StatusCode::GATEWAY_TIMEOUT),
     };
 
-    // Handle possible absence of usage data without panicking
     let (prompt_tokens, completion_tokens) = if let Some(usage) = resp.usage {
         (usage.input_tokens as u32, usage.output_tokens as u32)
     } else {
         (0, 0)
     };
-    let total_tokens = prompt_tokens + completion_tokens;
 
-    // Extract the content string safely
     let content_str = resp.output
         .and_then(|o| {
             match o {
@@ -207,30 +215,22 @@ async fn non_stream(
         })
         .unwrap_or_default();
     
-    logger.log_usage(
-        &user_email, 
-        &req.model, 
-        prompt_tokens, 
-        completion_tokens
-    );
+    logger.log_usage(&user_email, &model_name, prompt_tokens, completion_tokens);
 
     Json(json!({
         "id": format!("chatcmpl-{}", Uuid::new_v4()),
         "object": "chat.completion",
-        "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-        "model": req.model,
+        "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        "model": model_name,
         "choices": [{
             "index": 0,
-            "message": { 
-                "role": "assistant", 
-                "content": content_str 
-            },
+            "message": { "role": "assistant", "content": content_str },
             "finish_reason": "stop"
         }],
         "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens
         }
     })).into_response()
 }
@@ -240,19 +240,4 @@ async fn non_stream(
 // =======================
 fn error(msg: &str, code: StatusCode) -> AxumResponse {
     (code, Json(ErrorResponse { error: msg.into() })).into_response()
-}
-
-pub fn convert_messages_owned(messages: Vec<Message>) -> Vec<BedrockMessage> {
-    messages.into_iter().map(|m| {
-        let role = match m.role.as_str() {
-            "assistant" => ConversationRole::Assistant,
-            _ => ConversationRole::User,
-        };
-        
-        BedrockMessage::builder()
-            .role(role)
-            .content(ContentBlock::Text(m.content)) 
-            .build()
-            .expect("Failed to build message")
-    }).collect()
 }
