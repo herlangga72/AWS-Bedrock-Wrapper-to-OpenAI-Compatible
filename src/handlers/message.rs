@@ -1,5 +1,4 @@
 use crate::models::ChatRequest;
-// Note the full name: InferenceConfiguration
 use aws_sdk_bedrockruntime::types::{
     ContentBlock, ConversationRole, Message as BedrockMessage, 
     SystemContentBlock, InferenceConfiguration,
@@ -12,56 +11,41 @@ pub struct BedrockPayload {
 }
 
 pub fn build_bedrock_payload(req: ChatRequest) -> BedrockPayload {
-    let mut system_blocks = Vec::new();
-    let mut conversation_messages = Vec::new();
+    let mut messages = req.messages;
+    let total_len = messages.len();
 
-    // 1. Map messages and extract system prompt
-    for m in req.messages {
-        match m.role.as_str() {
-            "system" => {
-                system_blocks.push(SystemContentBlock::Text(m.content));
-            }
-            "assistant" => {
-                conversation_messages.push(
-                    BedrockMessage::builder()
-                        .role(ConversationRole::Assistant)
-                        .content(ContentBlock::Text(m.content))
-                        .build()
-                        .expect("Failed to build assistant message"),
-                );
-            }
-            _ => {
-                conversation_messages.push(
-                    BedrockMessage::builder()
-                        .role(ConversationRole::User)
-                        .content(ContentBlock::Text(m.content))
-                        .build()
-                        .expect("Failed to build user message"),
-                );
+    let mut bedrock_messages = Vec::with_capacity(total_len);
+    let mut system_blocks = Vec::with_capacity(1); // Usually only one system prompt
+
+    for m in messages.drain(..) {
+        if m.role == "system" {
+            system_blocks.push(SystemContentBlock::Text(m.content));
+        } else {
+            let role = match m.role.as_str() {
+                "assistant" => ConversationRole::Assistant,
+                _ => ConversationRole::User,
+            };
+
+            if let Ok(msg) = BedrockMessage::builder()
+                .role(role)
+                .content(ContentBlock::Text(m.content))
+                .build() 
+            {
+                bedrock_messages.push(msg);
             }
         }
     }
 
-    // 2. Build the correctly named InferenceConfiguration
-    let mut config_builder = InferenceConfiguration::builder();
-    
-    if let Some(temp) = req.temperature {
-        config_builder = config_builder.temperature(temp);
-    }
-    if let Some(top_p) = req.top_p {
-        config_builder = config_builder.top_p(top_p);
-    }
-    if let Some(max_t) = req.max_tokens {
-        // Bedrock expects i32 for max_tokens
-        config_builder = config_builder.max_tokens(max_t as i32);
-    }
-    if let Some(stop_seq) = req.stop_sequences {
-        config_builder = config_builder.stop_sequences(stop_seq);
-    }
+    let inference_config = InferenceConfiguration::builder()
+        .set_temperature(req.temperature)
+        .set_top_p(req.top_p)
+        .set_max_tokens(req.max_tokens.map(|m| m as i32))
+        .set_stop_sequences(req.stop_sequences.map(|s| vec![s]))
+        .build();
 
     BedrockPayload {
         system: if system_blocks.is_empty() { None } else { Some(system_blocks) },
-        messages: conversation_messages,
-        inference_config: config_builder.build(),
+        messages: bedrock_messages,
+        inference_config,
     }
 }

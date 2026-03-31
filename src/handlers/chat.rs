@@ -1,25 +1,109 @@
-use crate::models::{ChatRequest, ErrorResponse}; // Fixed: Added ChatRequest import
-use crate::handlers::{  
-    logger::ClickHouseLogger, 
-    message::build_bedrock_payload,
-};
+use crate::models::{ChatRequest, ErrorResponse};
+use crate::handlers::{logger::ClickHouseLogger, message::build_bedrock_payload};
 
-use axum::{
-    extract::State,
-    http::{StatusCode, HeaderMap},
-    Json,
-    response::{IntoResponse, Response as AxumResponse, sse::{Event, Sse, KeepAlive}},
-};
-use axum_extra::{TypedHeader, headers::{authorization::Bearer, Authorization}};
 use aws_sdk_bedrockruntime::{
-    types::{ContentBlock, ContentBlockDelta},
+    types::{ContentBlock, ContentBlockDelta, ConverseOutput as OutputEnum, ConverseStreamOutput as Out},
     Client as RuntimeClient,
 };
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
+    Json,
+};
+use axum_extra::{headers::{authorization::Bearer, Authorization}, TypedHeader};
 use futures_util::Stream;
-use serde_json::json;
-use std::{convert::Infallible, time::Duration};
+use serde::Serialize;
+use std::{convert::Infallible, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tokio::time::timeout;
 use uuid::Uuid;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+// =========================================================
+// ZERO-COPY MODELS (Shared across Stream & Non-Stream)
+// =========================================================
+#[derive(Serialize)]
+struct Usage {
+    input_tokens: u32,
+    output_tokens: u32,
+    total_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttft_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tokens_per_second: Option<f64>,
+}
+
+// Non-Stream Response Structure
+#[derive(Serialize)]
+struct FullResponse<'a> {
+    id: &'a str,
+    object: &'static str,
+    created: u64,
+    model: &'a str,
+    choices: [FullChoice<'a>; 1],
+    usage: Usage,
+}
+
+#[derive(Serialize)]
+struct FullChoice<'a> {
+    index: u32,
+    message: FullMessage<'a>,
+    finish_reason: &'static str,
+}
+
+#[derive(Serialize)]
+struct FullMessage<'a> {
+    role: &'static str,
+    content: &'a str,
+}
+
+// Stream Chunk Structure
+#[derive(Serialize)]
+struct ChatChunk<'a> {
+    id: &'a str,
+    object: &'static str,
+    created: u64,
+    model: &'a str,
+    choices: &'a [ChunkChoice<'a>],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<Usage>,
+}
+
+#[derive(Serialize)]
+struct ChunkChoice<'a> {
+    index: u32,
+    delta: ChunkDelta<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finish_reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ChunkDelta<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
+}
+
+// =========================================================
+// ENGINE ABSTRACTION
+// =========================================================
+struct BedrockEngine {
+    model_id: String,
+    model_name: String,
+    payload: crate::handlers::message::BedrockPayload, // Ensure this matches your return type
+}
+
+impl BedrockEngine {
+    fn new(req: ChatRequest) -> Self {
+        Self {
+            model_id: req.model.clone().replace("bedrock/", ""),
+            model_name: req.model.clone(),
+            payload: build_bedrock_payload(req),
+        }
+    }
+}
 
 // =======================
 // Main Chat Handler
@@ -28,32 +112,32 @@ pub async fn chat_handler(
     State(state): State<crate::AppState>,
     auth: Option<TypedHeader<Authorization<Bearer>>>,
     headers: HeaderMap,
-    Json(req): Json<ChatRequest>, 
-) -> AxumResponse {
-    // Validate API key
-    match auth {
-        Some(TypedHeader(auth_header)) => {
-            if auth_header.token() != state.api_key {
-                return error("invalid api key", StatusCode::UNAUTHORIZED);
-            }
-        }
-        None => return error("missing authorization", StatusCode::UNAUTHORIZED),
-    };
+    Json(req): Json<ChatRequest>,
+) -> Response {
+    // 1. Auth check
+    if !auth.map_or(false, |TypedHeader(a)| a.token() == state.api_key) {
+        return (StatusCode::UNAUTHORIZED, Json(ErrorResponse { error: "Unauthorized".into() })).into_response();
+    }
 
     let user_email = headers.get("x-openwebui-user-email")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("anonymous")
-                    .to_string();
+        .and_then(|v| v.to_str().ok()).map(|s| s.to_string()).unwrap_or_else(|| "anonymous".into());
 
-    let stream_flag = req.stream.unwrap_or(true);
+    // let chat_id = headers.get("x-openwebui-chat-id")
+    //     .and_then(|v| v.to_str().ok()).map(|s| s.to_string()).unwrap_or_else(|| Uuid::new_v4().into());
+
+    let message_id = headers.get("x-openwebui-message-id")
+        .and_then(|v| v.to_str().ok()).map(|s| s.to_string()).unwrap_or_else(|| Uuid::new_v4().into());
     
-    println!("Received chat request for model: {}, stream: {}", req.model, stream_flag);
-    
-    if stream_flag {
-        let s = stream_converse(state.client.clone(), req, state.logger.clone(), user_email);
+    let is_stream = req.stream.unwrap_or(true);
+    let engine = BedrockEngine::new(req);
+    let client = Arc::new(state.client.clone());
+    let logger = Arc::new(state.logger.clone());
+
+    if is_stream {
+        let s = stream_converse(client, engine, logger, user_email, message_id);
         Sse::new(s).keep_alive(KeepAlive::default()).into_response()
     } else {
-        non_stream(state.client.clone(), req, state.logger.clone(), user_email).await
+        non_stream(client, engine, logger, user_email, message_id).await
     }
 }
 
@@ -61,103 +145,124 @@ pub async fn chat_handler(
 // STREAM MODE
 // =======================
 fn stream_converse(
-    client: RuntimeClient,
-    req: ChatRequest,
-    logger: ClickHouseLogger,
+    client: Arc<RuntimeClient>,
+    engine: BedrockEngine,
+    logger: Arc<ClickHouseLogger>,
     user_email: String,
+    message_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
-    let model_id = req.model.replace("bedrock/", "");
-    let request_id = format!("chatcmpl-{}", Uuid::new_v4());
-    let model_name = req.model.clone();
+    let start_time = tokio::time::Instant::now(); // Start timer
+    let mut ttft_ms: Option<u64> = None;
+
+
+    let request_id = message_id;
+
+    let created = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 
     async_stream::stream! {
-        let payload = build_bedrock_payload(req);
+        let sdk_call = client.converse_stream()
+            .model_id(&engine.model_id)
+            .set_messages(Some(engine.payload.messages))
+            .set_system(engine.payload.system)
+            .inference_config(engine.payload.inference_config)
+            .send();
 
-        let sdk_result = timeout(
-            Duration::from_secs(60),
-            client.converse_stream()
-                .model_id(&model_id)
-                .set_messages(Some(payload.messages))
-                .set_system(payload.system)
-                .inference_config(payload.inference_config)
-                .send()
-        ).await;
-
-        let mut resp = match sdk_result {
+        let mut resp = match timeout(REQUEST_TIMEOUT, sdk_call).await {
             Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                yield Ok(Event::default().data(json!({"error": e.to_string()}).to_string()));
-                return;
-            }
-            Err(_) => {
-                yield Ok(Event::default().data(json!({"error": "stream timeout"}).to_string()));
-                return;
-            }
+            _ => { yield Ok(Event::default().data(r#"{"error":"Stream failed"}"#)); return; }
         };
 
-        let mut prompt_tokens = 0u32;
-        let mut completion_tokens = 0u32;
+        let mut metrics = (0u32, 0u32);
 
         while let Ok(Some(event)) = resp.stream.recv().await {
-            use aws_sdk_bedrockruntime::types::ConverseStreamOutput as Out;
-            
             match event {
                 Out::ContentBlockDelta(delta) => {
+                    if ttft_ms.is_none() {
+                        ttft_ms = Some(start_time.elapsed().as_millis() as u64);
+                    }
                     if let Some(ContentBlockDelta::Text(t)) = delta.delta {
-                        let chunk = json!({
-                            "id": request_id,
-                            "object": "chat.completion.chunk",
-                            "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-                            "model": model_name,
-                            "choices": [{
-                                "index": 0,
-                                "delta": { "content": t },
-                                "finish_reason": null
-                            }]
-                        });
-                        yield Ok(Event::default().data(chunk.to_string()));
+                        let choices = [
+                            ChunkChoice { 
+                                index: 0, 
+                                delta: ChunkDelta { 
+                                    content: Some(&t) 
+                                }, 
+                                finish_reason: None 
+                            }];
+                        let chunk = ChatChunk { 
+                            id: &request_id, 
+                            object: "chat.completion.chunk", 
+                            created, 
+                            model: &engine.model_name, 
+                            choices: &choices, 
+                            usage: None 
+                        };
+                        if let Ok(j) = serde_json::to_string(&chunk) { 
+                            yield Ok(Event::default().data(j)); 
+                        }
                     }
                 }
-                Out::Metadata(metadata) => {
-                    if let Some(usage) = metadata.usage {
-                        prompt_tokens = usage.input_tokens as u32;
-                        completion_tokens = usage.output_tokens as u32;
-                    }
+                Out::Metadata(m) => if let Some(u) = m.usage { 
+                    metrics = (
+                        u.input_tokens as u32, 
+                        u.output_tokens as u32
+                    ); 
                 }
                 Out::MessageStop(stop) => {
-                    let last_chunk = json!({
-                        "id": request_id,
-                        "object": "chat.completion.chunk",
-                        "model": model_name,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": format!("{:?}", stop.stop_reason).to_lowercase()
-                        }]
-                    });
-                    yield Ok(Event::default().data(last_chunk.to_string()));
+                    let choices = [
+                        ChunkChoice { 
+                            index: 0, 
+                            delta: ChunkDelta { 
+                                content: None 
+                            }, 
+                            finish_reason: Some(
+                                format!("{:?}", stop.stop_reason).to_lowercase()
+                            ) 
+                        }];
+                    let chunk = ChatChunk { 
+                        id: &request_id, 
+                        object: "chat.completion.chunk", 
+                        created, 
+                        model: &engine.model_name, 
+                        choices: &choices, 
+                        usage: None 
+                    };
+                    if let Ok(j) = serde_json::to_string(&chunk) { 
+                        yield Ok(Event::default().data(j)); 
+                    }
                 }
                 _ => {}
             }
         }
 
-        logger.log_usage(&user_email, &model_name, prompt_tokens, completion_tokens);
-        
-        if prompt_tokens > 0 || completion_tokens > 0 {
-            let usage_chunk = json!({
-                "id": request_id,
-                "object": "chat.completion.chunk",
-                "model": model_name,
-                "choices": [], 
-                "usage": {
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens
-                }
-            });
-            yield Ok(Event::default().data(usage_chunk.to_string()));
-        }
+        let total_duration_ms = start_time.elapsed().as_millis() as u64;
+        let (p, c) = metrics;
 
+        if p > 0 || c > 0 {
+            let ttft = ttft_ms.unwrap_or(total_duration_ms);
+            let gen_time_sec = (total_duration_ms.saturating_sub(ttft) as f64) / 1000.0;
+            let tps = if gen_time_sec > 0.0 { c as f64 / gen_time_sec } else { 0.0 };
+
+            let usage_chunk = ChatChunk { 
+                id: &request_id, 
+                object: "chat.completion.chunk", 
+                created, 
+                model: &engine.model_name, 
+                choices: &[], 
+                usage: Some(Usage { 
+                    input_tokens: p, 
+                    output_tokens: c, 
+                    total_tokens: p + c,
+                    ttft_ms: Some(ttft),
+                    latency_ms: Some(total_duration_ms),
+                    tokens_per_second: Some((tps * 100.0).round() / 100.0), 
+                }) 
+            };
+            if let Ok(j) = serde_json::to_string(&usage_chunk) { 
+                yield Ok(Event::default().data(j)); 
+            }
+            spawn_log(logger, user_email, engine.model_name, p, c);
+        }
         yield Ok(Event::default().data("[DONE]"));
     }
 }
@@ -166,78 +271,73 @@ fn stream_converse(
 // NON-STREAM MODE
 // =======================
 async fn non_stream(
-    client: RuntimeClient,
-    req: ChatRequest,
-    logger: ClickHouseLogger,
+    client: Arc<RuntimeClient>,
+    engine: BedrockEngine,
+    logger: Arc<ClickHouseLogger>,
     user_email: String,
-) -> AxumResponse {
-    let model_id = req.model.replace("bedrock/", "");
-    let model_name = req.model.clone();
-    let payload = build_bedrock_payload(req);
+    message_id: String,
+) -> Response {
+    let start_time = tokio::time::Instant::now();
 
-    let sdk_result = timeout(
-        Duration::from_secs(60),
-        client.converse()
-            .model_id(&model_id)
-            .set_messages(Some(payload.messages))
-            .set_system(payload.system)
-            .inference_config(payload.inference_config)
-            .send()
-    ).await;
+    let sdk_call = client.converse()
+        .model_id(&engine.model_id)
+        .set_messages(Some(engine.payload.messages))
+        .set_system(engine.payload.system)
+        .inference_config(engine.payload.inference_config)
+        .send();
 
-    // Fixed: Properly unwrap the nested Result (Timeout -> SDK Result -> Output)
-    let resp = match sdk_result {
+    let resp = match timeout(REQUEST_TIMEOUT, sdk_call).await {
         Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
-            eprintln!("Bedrock SDK error: {}", e);
-            return error("Bedrock service error", StatusCode::BAD_GATEWAY);
-        }
-        Err(_) => return error("Upstream timeout", StatusCode::GATEWAY_TIMEOUT),
+        _ => return (StatusCode::BAD_GATEWAY, "Bedrock Error").into_response(),
     };
 
-    let (prompt_tokens, completion_tokens) = if let Some(usage) = resp.usage {
-        (usage.input_tokens as u32, usage.output_tokens as u32)
-    } else {
-        (0, 0)
-    };
+    let p = resp.usage.as_ref().map(|u| u.input_tokens as u32).unwrap_or(0);
+    let c = resp.usage.as_ref().map(|u| u.output_tokens as u32).unwrap_or(0);
 
-    let content_str = resp.output
-        .and_then(|o| {
-            match o {
-                aws_sdk_bedrockruntime::types::ConverseOutput::Message(m) => Some(m),
-                _ => None,
-            }
-        })
-        .and_then(|m| {
-            m.content.into_iter().next().and_then(|c| {
-                if let ContentBlock::Text(t) = c { Some(t) } else { None }
-            })
-        })
+    let content = resp.output
+        .and_then(|o| match o { OutputEnum::Message(m) => Some(m), _ => None })
+        .and_then(|m| m.content.into_iter().next())
+        .and_then(|cb| match cb { ContentBlock::Text(t) => Some(t), _ => None })
         .unwrap_or_default();
-    
-    logger.log_usage(&user_email, &model_name, prompt_tokens, completion_tokens);
 
-    Json(json!({
-        "id": format!("chatcmpl-{}", Uuid::new_v4()),
-        "object": "chat.completion",
-        "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-        "model": model_name,
-        "choices": [{
-            "index": 0,
-            "message": { "role": "assistant", "content": content_str },
-            "finish_reason": "stop"
+    spawn_log(logger, user_email, engine.model_name.clone(), p, c);
+
+    let request_id = message_id;
+
+    let total_duration_ms = start_time.elapsed().as_millis() as u64;
+
+    let (p, c) = (resp.usage.as_ref().map(|u| u.input_tokens as u32).unwrap_or(0), 
+                  resp.usage.as_ref().map(|u| u.output_tokens as u32).unwrap_or(0));
+
+    let tps = if total_duration_ms > 0 { (c as f64) / (total_duration_ms as f64 / 1000.0) } else { 0.0 };
+    
+    let full_resp = FullResponse {
+        id: &request_id,
+        object: "chat.completion",
+        created: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+        model: &engine.model_name,
+        choices: [FullChoice {
+            index: 0,
+            message: FullMessage { role: "assistant", content: &content },
+            finish_reason: "stop",
         }],
-        "usage": {
-            "input_tokens": prompt_tokens,
-            "output_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens
-        }
-    })).into_response()
+        usage: Usage { 
+            input_tokens: p, 
+            output_tokens: c, 
+            total_tokens: p + c,
+            ttft_ms: Some(total_duration_ms), 
+            latency_ms: Some(total_duration_ms),
+            tokens_per_second: Some((tps * 100.0).round() / 100.0),
+        },
+    };
+
+    match serde_json::to_string(&full_resp) {
+        Ok(json) => (StatusCode::OK, [("content-type", "application/json")], json).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
-// =======================
-// HELPERS
-// =======================
-fn error(msg: &str, code: StatusCode) -> AxumResponse {
-    (code, Json(ErrorResponse { error: msg.into() })).into_response()
+// Shared Helper
+fn spawn_log(logger: Arc<ClickHouseLogger>, email: String, model: String, p: u32, c: u32) {
+    tokio::spawn(async move { let _ = logger.log_usage(&email, &model, p, c); });
 }

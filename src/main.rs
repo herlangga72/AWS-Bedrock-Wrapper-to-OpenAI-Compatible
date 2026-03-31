@@ -15,7 +15,7 @@ pub struct AppState {
     pub client: RuntimeClient,
     pub mgmt_client: MgmtClient,
     pub api_key: String,
-    pub logger: ClickHouseLogger,
+    pub logger: ClickHouseLogger
 }
 
 #[tokio::main]
@@ -52,6 +52,7 @@ async fn main() {
     let app = Router::new()
         .route("/v1/chat/completions", post(handlers::chat::chat_handler))
         .route("/v1/models", get(handlers::models::list_models_handler))
+        .route("/v1/embeddings", post(handlers::embedding::handle_embeddings))
         .with_state(state);
 
     // 6. Start Server
