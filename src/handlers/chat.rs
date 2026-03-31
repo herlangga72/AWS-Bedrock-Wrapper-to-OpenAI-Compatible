@@ -1,4 +1,4 @@
-use crate::models::{ChatRequest, ErrorResponse};
+use crate::models::{ChatRequest};
 use crate::handlers::{logger::ClickHouseLogger, message::build_bedrock_payload};
 
 use aws_sdk_bedrockruntime::{
@@ -114,21 +114,37 @@ pub async fn chat_handler(
     headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Response {
-    // 1. Auth check
-    if !auth.map_or(false, |TypedHeader(a)| a.token() == state.api_key) {
-        return (StatusCode::UNAUTHORIZED, Json(ErrorResponse { error: "Unauthorized".into() })).into_response();
-    }
+// 1. Extract token and authenticate immediately to avoid keeping the header in scope
+    let temp_user_email = match auth {
+        Some(TypedHeader(Authorization(bearer))) => {
+            match state.auth.authenticate(bearer.token()) {
+                Ok(email) => email,
+                Err(_) => return StatusCode::FORBIDDEN.into_response(),
+            }
+        }
+        None => return (StatusCode::UNAUTHORIZED, "Missing API Key").into_response(),
+    };
 
-    let user_email = headers.get("x-openwebui-user-email")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string()).unwrap_or_else(|| "anonymous".into());
+    // 2. Determine user identity using borrowing
+    // Avoid .to_string() until the very last moment or if the downstream requires ownership
+    let user_email = if temp_user_email == "chat" {
+        headers.get("x-openwebui-user-email")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("anonymous")
+            .to_string()
+    } else {
+        temp_user_email // reuse the String from authenticate()
+    };
 
-    // let chat_id = headers.get("x-openwebui-chat-id")
-    //     .and_then(|v| v.to_str().ok()).map(|s| s.to_string()).unwrap_or_else(|| Uuid::new_v4().into());
-
+    // 3. Extract Message ID with fallback
     let message_id = headers.get("x-openwebui-message-id")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string()).unwrap_or_else(|| Uuid::new_v4().into());
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned()) // Preferred over to_string() for explicit intent
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     
     let is_stream = req.stream.unwrap_or(true);
+    
+    // 4. Zero-cost Engine initialization
     let engine = BedrockEngine::new(req);
     let client = Arc::new(state.client.clone());
     let logger = Arc::new(state.logger.clone());

@@ -1,65 +1,58 @@
-use axum::{extract::State, response:: { Json, IntoResponse } };
-use serde_json::{json, Value};
-use tokio::fs; // Use async FS
-
-const CACHE_FILE: &str = "/tmp/bedrock_models_cache.json";
-const CACHE_TTL_SECONDS: u64 = 3600;
+use axum::{extract::State, response::IntoResponse, http::{header, StatusCode}};
+use bytes::Bytes;                        
+use crate::AppState;                     
+use crate::models::{ModelData, ModelList};
+use tokio::fs;
+use std::sync::Arc;
+use std::collections::HashMap;
+use std::time::Duration;
 
 pub async fn list_models_handler(
-    State(state): State<crate::AppState>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    // 1. Async cache check
-    if let Some(cached) = try_read_cache().await {
-        return Json(cached).into_response();
-    }
+    let cache = state.file_cache.load();
 
-    // 2. Fetch from AWS
-    match state.mgmt_client.list_foundation_models().send().await {
-        Ok(resp) => {
-            let summaries = resp.model_summaries.unwrap_or_default();
-            
-            // 3. Map directly into the final vector to avoid double-allocation
-            let data: Vec<_> = summaries
-                .into_iter()
-                .map(|m| crate::models::ModelData {
-                    id: m.model_id,
-                    object: "model".into(),
-                    created: 0,
-                    owned_by: m.provider_name.unwrap_or_else(|| "bedrock".into()),
-                })
-                .collect();
-
-            let response_body = crate::models::ModelList {
-                object: "list".to_string(),
-                data,
-            };
-
-            // 4. Fire-and-forget cache write (Async)
-            // Serializing to a Vec<u8> is often faster than String for FS writes
-            if let Ok(bytes) = serde_json::to_vec(&response_body) {
-                let _ = fs::write(CACHE_FILE, bytes).await;
-            }
-
-            Json(response_body).into_response()
-        }
-        Err(e) => {
-            tracing::error!("Failed to list Bedrock models: {e}");
+    match cache.get("bedrock_models") {
+        Some(bytes) => {
             (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "object": "error", "message": "Failed to retrieve models" }))
+                [(header::CONTENT_TYPE, "application/json")],
+                bytes.clone()
             ).into_response()
         }
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
-async fn try_read_cache() -> Option<Value> {
-    let metadata = fs::metadata(CACHE_FILE).await.ok()?;
-    let modified = metadata.modified().ok()?;
+pub async fn refresh_models_cache(state: &AppState) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let resp = state.mgmt_client.list_foundation_models().send().await?;
     
-    if modified.elapsed().ok()?.as_secs() > CACHE_TTL_SECONDS {
-        return None;
-    }
+    let summaries = resp.model_summaries.unwrap_or_default();
+    let data: Vec<ModelData> = summaries.into_iter().map(|m| ModelData {
+        id: m.model_id,
+        object: "model",
+        created: 0,
+        owned_by: m.provider_name.unwrap_or_else(|| "bedrock".into()),
+    }).collect();
 
-    let contents = fs::read(CACHE_FILE).await.ok()?;
-    serde_json::from_slice(&contents).ok()
+    let response_body = ModelList { object: "list", data };
+    let bytes = Bytes::from(serde_json::to_vec(&response_body)?);
+
+    let mut new_map = HashMap::with_capacity(1);
+    new_map.insert("bedrock_models".to_string(), bytes.clone());
+    state.file_cache.store(Arc::new(new_map));
+
+    let _ = fs::write("/tmp/bedrock_models_cache.json", bytes).await;
+
+    Ok(())
+}
+
+pub(crate) async fn run_cache_monitor(state: AppState) {
+    let mut interval = tokio::time::interval(Duration::from_secs(3600));
+    
+    loop {
+        interval.tick().await;
+        if let Err(e) = refresh_models_cache(&state).await {
+            eprintln!("Cache refresh failed: {e}");
+        }
+    }
 }

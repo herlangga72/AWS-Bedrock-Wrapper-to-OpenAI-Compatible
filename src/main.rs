@@ -8,14 +8,20 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use handlers::logger::ClickHouseLogger;
+use handlers::{logger::ClickHouseLogger, auth::Authentication};
+use std::sync::Arc;
+use bytes::Bytes; 
+use arc_swap::ArcSwap;
+use std::collections::HashMap;
+
 
 #[derive(Clone)]
 pub struct AppState {
     pub client: RuntimeClient,
     pub mgmt_client: MgmtClient,
-    pub api_key: String,
-    pub logger: ClickHouseLogger
+    pub logger: ClickHouseLogger,
+    pub file_cache: Arc<ArcSwap<HashMap<String, Bytes>>>,
+    pub auth: handlers::auth::Authentication,
 }
 
 #[tokio::main]
@@ -30,23 +36,28 @@ async fn main() {
         .load()
         .await;
 
+    let api_database = std::env::var("DB_API_KEY_LOCATION_SQLITE").unwrap_or_else(|_| "api_keys.db".to_string());
+
     // 2. Create Clients
     let runtime_client = RuntimeClient::new(&config);
     let mgmt_client = MgmtClient::new(&config);
-
-    // 3. Initialize Logger (ClickHouse URL from ENV)
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL").expect("CLICKHOUSE_URL must be set");
+    let logger = ClickHouseLogger::new(); 
+    let auth_service = Authentication::new(&api_database).expect("Failed to initialize authentication service");
     
-    // FIX: Pass as a reference (&str) instead of owned String
-    let logger = ClickHouseLogger::new(&clickhouse_url); 
+    let _ = auth_service.register_key(&std::env::var("DEFAULT_API_KEY").expect("API_KEY must be set"), "chat");
 
     // 4. Setup AppState
     let state = AppState {
         client: runtime_client,
         mgmt_client,
-        api_key: std::env::var("API_KEY").expect("API_KEY must be set"),
         logger,
+        file_cache: Arc::new(ArcSwap::from_pointee(HashMap::new())),
+        auth: auth_service,
     };
+
+    // let Models Populate
+    let monitor_state = state.clone(); 
+    tokio::spawn(crate::handlers::models::run_cache_monitor(monitor_state));
 
     // 5. Build Router
     let app = Router::new()
@@ -65,3 +76,5 @@ async fn main() {
     
     axum::serve(listener, app).await.unwrap();
 }
+
+

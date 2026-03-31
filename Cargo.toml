@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 axum = { version = "0.8.8", default-features = false, features = ["tokio", "http1", "json", "macros"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "full"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,4 +25,8 @@ axum-extra = { version = "0.12.5", features = ["typed-header"] }
 reqwest = "0.13.2"
 
 fastembed = "4.0"
+bytes = "1.11.1"
+clickhouse = { version = "0.14.3", features = ["chrono"] }
+arc-swap = "1.9.0"
+rusqlite = "0.39.0"
 

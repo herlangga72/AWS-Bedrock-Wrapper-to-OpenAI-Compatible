@@ -1,52 +1,60 @@
-use reqwest::Client;
+use clickhouse::{Client, Row};
 use serde::Serialize;
-use chrono::Utc;
-use tokio::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::{interval, MissedTickBehavior};
 
-#[derive(Serialize)]
-struct LogEntry {
-    timestamp: String,
-    model: String,
-    user_email: String,
-    input_tokens: u32,
-    output_tokens: u32,
+#[derive(Row, Serialize)]
+pub struct LogEntry {
+    #[serde(with = "clickhouse::serde::chrono::datetime")]
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub model: String,
+    pub user_email: String,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
 }
 
 #[derive(Clone)]
 pub struct ClickHouseLogger {
-    tx: mpsc::UnboundedSender<LogEntry>,
+    tx: mpsc::Sender<LogEntry>,
 }
 
 impl ClickHouseLogger {
-    pub fn new(addr: &str) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<LogEntry>();
-        let client = Client::builder()
-            .tcp_keepalive(Duration::from_secs(60))
-            .timeout(Duration::from_secs(10))
-            .build()
-            .expect("Failed to build client");
+    pub fn new() -> Self {
+        let url = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
+        let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+        let pass = std::env::var("CLICKHOUSE_PASSWORD").expect("CLICKHOUSE_PASSWORD must be set");
+        let db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "default".to_string());
 
-        let url = format!("{}/?query=INSERT+INTO+chat_logs+FORMAT+JSONEachRow", addr);
+        let (tx, mut rx) = mpsc::channel::<LogEntry>(4096);
+        
+        // Configure the client once
+        let client = Client::default()
+            .with_url(url)
+            .with_user(user)
+            .with_password(pass)
+            .with_database(db)
+            .with_compression(clickhouse::Compression::Lz4);
+
         tokio::spawn(async move {
-            let mut batch = Vec::with_capacity(100);
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            let mut batch = Vec::with_capacity(5000);
+            let mut ticker = interval(Duration::from_secs(2));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
             loop {
                 tokio::select! {
-                    // Receive a log
                     Some(entry) = rx.recv() => {
                         batch.push(entry);
-                        if batch.len() >= 100 {
-                            Self::flush(&client, &url, &mut batch).await;
+                        if batch.len() >= 5000 {
+                            Self::flush(&client, &mut batch).await;
                         }
                     }
-                    // Flush periodically even if batch isn't full
-                    _ = interval.tick() => {
+                    _ = ticker.tick() => {
                         if !batch.is_empty() {
-                            Self::flush(&client, &url, &mut batch).await;
+                            Self::flush(&client, &mut batch).await;
                         }
                     }
+                    else => break,
                 }
             }
         });
@@ -54,28 +62,38 @@ impl ClickHouseLogger {
         Self { tx }
     }
 
-    async fn flush(client: &Client, url: &str, batch: &mut Vec<LogEntry>) {
-        let mut body = String::new();
+    async fn flush(client: &Client, batch: &mut Vec<LogEntry>) {
+        // Use the turbofish <LogEntry> to satisfy the compiler
+        let mut inserter = match client.insert::<LogEntry>("chat_logs").await {
+            Ok(ins) => ins,
+            Err(e) => {
+                eprintln!("[ClickHouse] Connection failed: {:?}", e);
+                batch.clear(); 
+                return;
+            }
+        };
+
         for entry in batch.drain(..) {
-            if let Ok(json) = serde_json::to_string(&entry) {
-                body.push_str(&json);
-                body.push('\n');
+            if let Err(e) = inserter.write(&entry).await {
+                eprintln!("[ClickHouse] Write failed: {:?}", e);
+                break;
             }
         }
 
-        if let Err(e) = client.post(url).body(body).send().await {
-            eprintln!("ClickHouse Batch Insert Failed: {:?}", e);
+        if let Err(e) = inserter.end().await {
+            eprintln!("[ClickHouse] Commit failed: {:?}", e);
         }
     }
 
-    pub fn log_usage(&self, user_email: &str, model: &str, input_tokens: u32, output_tokens: u32) {
+    pub fn log_usage(&self, email: &str, model: &str, input: u32, output: u32) {
         let entry = LogEntry {
-            timestamp: Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            timestamp: chrono::Utc::now(),
             model: model.to_string(),
-            user_email: user_email.to_string(),
-            input_tokens,
-            output_tokens,
+            user_email: email.to_string(),
+            input_tokens: input,
+            output_tokens: output,
         };
-        let _ = self.tx.send(entry);
+
+        let _ = self.tx.try_send(entry);
     }
 }
