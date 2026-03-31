@@ -1,66 +1,58 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Json,
-    debug_handler,
-};
-use serde_json::json;
-use std::fs;
+use axum::{extract::State, response::IntoResponse, http::{header, StatusCode}};
+use bytes::Bytes;                        
+use crate::AppState;                     
+use crate::models::{ModelData, ModelList};
+use tokio::fs;
+use std::sync::Arc;
+use std::collections::HashMap;
+use std::time::Duration;
 
-const CACHE_FILE: &str = "/tmp/bedrock_models_cache.json";
-const CACHE_TTL_SECONDS: u64 = 3600;
-
-#[debug_handler]
 pub async fn list_models_handler(
-    State(state): State<crate::AppState>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if let Some(cached) = try_read_cache() {
-        return Json(cached).into_response();
-    }
-    match state.mgmt_client.list_foundation_models().send().await {
-        Ok(resp) => {
-            let summaries = resp.model_summaries.unwrap_or_default();
-            let mut data = Vec::with_capacity(summaries.len());
+    let cache = state.file_cache.load();
 
-            for m in summaries {
-                data.push(crate::models::ModelData {
-                    id: m.model_id, 
-                    object: "model".into(),
-                    created: 0,
-                    owned_by: m.provider_name.unwrap_or_else(|| "bedrock".into()),
-                });
-            }
-
-            let response_body = crate::models::ModelList {
-                object: "list".to_string(),
-                data,
-            };
-
-            if let Ok(json_str) = serde_json::to_string(&response_body) {
-                let _ = fs::write(CACHE_FILE, &*json_str); // &* → &str
-            }
-
-            Json(response_body).into_response()
+    match cache.get("bedrock_models") {
+        Some(bytes) => {
+            (
+                [(header::CONTENT_TYPE, "application/json")],
+                bytes.clone()
+            ).into_response()
         }
-
-        Err(e) => {
-            tracing::error!("Failed to list Bedrock models: {e}");
-            Json(json!({
-                "object": "error",
-                "message": "Failed to retrieve models",
-                "data": []
-            })).into_response()
-        }
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
-// Same cache reader (unchanged)
-fn try_read_cache() -> Option<serde_json::Value> {
-    let metadata = fs::metadata(CACHE_FILE).ok()?;
-    let elapsed = metadata.modified().ok()?.elapsed().ok()?;
-    if elapsed > std::time::Duration::from_secs(CACHE_TTL_SECONDS) {
-        return None;
+pub async fn refresh_models_cache(state: &AppState) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let resp = state.mgmt_client.list_foundation_models().send().await?;
+    
+    let summaries = resp.model_summaries.unwrap_or_default();
+    let data: Vec<ModelData> = summaries.into_iter().map(|m| ModelData {
+        id: m.model_id,
+        object: "model",
+        created: 0,
+        owned_by: m.provider_name.unwrap_or_else(|| "bedrock".into()),
+    }).collect();
+
+    let response_body = ModelList { object: "list", data };
+    let bytes = Bytes::from(serde_json::to_vec(&response_body)?);
+
+    let mut new_map = HashMap::with_capacity(1);
+    new_map.insert("bedrock_models".to_string(), bytes.clone());
+    state.file_cache.store(Arc::new(new_map));
+
+    let _ = fs::write("/tmp/bedrock_models_cache.json", bytes).await;
+
+    Ok(())
+}
+
+pub(crate) async fn run_cache_monitor(state: AppState) {
+    let mut interval = tokio::time::interval(Duration::from_secs(3600));
+    
+    loop {
+        interval.tick().await;
+        if let Err(e) = refresh_models_cache(&state).await {
+            eprintln!("Cache refresh failed: {e}");
+        }
     }
-    let contents = fs::read_to_string(CACHE_FILE).ok()?;
-    serde_json::from_str(&contents).ok()
 }

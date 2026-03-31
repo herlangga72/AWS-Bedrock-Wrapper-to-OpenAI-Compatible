@@ -17,21 +17,17 @@ pub struct Message {
     pub content: String,
 }
 
-#[derive(Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelData {
     pub id: String,
-    pub object: String,
+    pub object: &'static str,
     pub created: u64,
     pub owned_by: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelList {
-    pub object: String,
+    pub object: &'static str,
     pub data: Vec<ModelData>,
 }
