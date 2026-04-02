@@ -1,6 +1,7 @@
 mod handlers;
 mod models;
 
+use arc_swap::ArcSwap;
 use aws_config::Region;
 use aws_sdk_bedrock::Client as MgmtClient;
 use aws_sdk_bedrockruntime::Client as RuntimeClient;
@@ -8,12 +9,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use handlers::{logger::ClickHouseLogger, auth::Authentication};
-use std::sync::Arc;
-use bytes::Bytes; 
-use arc_swap::ArcSwap;
+use bytes::Bytes;
+use handlers::{auth::Authentication, logger::ClickHouseLogger};
 use std::collections::HashMap;
-
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,15 +35,20 @@ async fn main() {
         .load()
         .await;
 
-    let api_database = std::env::var("DB_API_KEY_LOCATION_SQLITE").unwrap_or_else(|_| "api_keys.db".to_string());
+    let api_database =
+        std::env::var("DB_API_KEY_LOCATION_SQLITE").unwrap_or_else(|_| "api_keys.db".to_string());
 
     // 2. Create Clients
     let runtime_client = RuntimeClient::new(&config);
     let mgmt_client = MgmtClient::new(&config);
-    let logger = ClickHouseLogger::new(); 
-    let auth_service = Authentication::new(&api_database).expect("Failed to initialize authentication service");
-    
-    let _ = auth_service.register_key(&std::env::var("DEFAULT_API_KEY").expect("API_KEY must be set"), "chat");
+    let logger = ClickHouseLogger::new();
+    let auth_service =
+        Authentication::new(&api_database).expect("Failed to initialize authentication service");
+
+    let _ = auth_service.register_key(
+        &std::env::var("DEFAULT_API_KEY").expect("API_KEY must be set"),
+        "chat",
+    );
 
     // 4. Setup AppState
     let state = AppState {
@@ -56,14 +60,17 @@ async fn main() {
     };
 
     // let Models Populate
-    let monitor_state = state.clone(); 
+    let monitor_state = state.clone();
     tokio::spawn(crate::handlers::models::run_cache_monitor(monitor_state));
 
     // 5. Build Router
     let app = Router::new()
         .route("/v1/chat/completions", post(handlers::chat::chat_handler))
         .route("/v1/models", get(handlers::models::list_models_handler))
-        .route("/v1/embeddings", post(handlers::embedding::handle_embeddings))
+        .route(
+            "/v1/embeddings",
+            post(handlers::embedding::handle_embeddings),
+        )
         .with_state(state);
 
     // 6. Start Server
@@ -73,8 +80,6 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("🚀 Bedrock Proxy listening on {}", addr);
-    
+
     axum::serve(listener, app).await.unwrap();
 }
-
-

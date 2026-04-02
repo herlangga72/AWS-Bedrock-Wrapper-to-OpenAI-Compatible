@@ -1,30 +1,16 @@
+use crate::AppState;
 use aws_sdk_bedrockruntime::primitives::Blob;
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use std::borrow::Cow;
+// --- 1. Request Schemas ---
 
-// --- 1. Schemas (Grouped for zero-cost serialization) ---
-
-#[derive(Serialize)]
-pub struct OpenAiEmbeddingResponse {
-    pub object: &'static str,
-    pub data: Vec<OpenAiEmbeddingData>,
-    pub model: &'static str,
-    pub usage: OpenAiUsage,
+#[derive(Deserialize)]
+pub struct OpenAiEmbeddingRequest {
+    pub input: Vec<String>,
 }
 
-#[derive(Serialize)]
-pub struct OpenAiEmbeddingData {
-    pub object: &'static str,
-    pub embedding: Vec<f32>,
-    pub index: usize,
-}
-
-#[derive(Serialize)]
-pub struct OpenAiUsage {
-    pub prompt_tokens: u64,
-    pub total_tokens: u64,
-}
+// --- 2. Nova 2 Schemas ---
 
 #[derive(Serialize)]
 struct NovaRequest<'a> {
@@ -47,8 +33,10 @@ struct NovaParams<'a> {
 struct NovaText<'a> {
     #[serde(rename = "truncationMode")]
     truncation_mode: &'static str,
-    value: &'a str,
+    value: Cow<'a, str>,
 }
+
+// --- 3. AWS Response Schemas ---
 
 #[derive(Deserialize)]
 struct NovaResponse {
@@ -62,62 +50,109 @@ struct NovaEmbeddingEntry {
     embedding: Vec<f32>,
 }
 
-#[derive(Deserialize)]
-pub struct OpenAiEmbeddingRequest {
-    pub input: Vec<String>,
+// --- 4. OpenAI Result Schemas ---
+
+#[derive(Serialize)]
+pub struct OpenAiEmbeddingResponse {
+    pub object: &'static str,
+    pub data: Vec<OpenAiEmbeddingData>,
+    pub model: &'static str,
+    pub usage: OpenAiUsage,
 }
+
+#[derive(Serialize)]
+pub struct OpenAiEmbeddingData {
+    pub object: &'static str,
+    pub embedding: Vec<f32>,
+    pub index: usize,
+}
+
+#[derive(Serialize)]
+pub struct OpenAiUsage {
+    pub prompt_tokens: u64,
+    pub total_tokens: u64,
+}
+
+// --- 5. Handler ---
 
 pub async fn handle_embeddings(
     State(state): State<AppState>,
-    Json(payload): Json<OpenAiEmbeddingRequest>,
+    mut payload: Json<OpenAiEmbeddingRequest>,
 ) -> Result<Json<OpenAiEmbeddingResponse>, StatusCode> {
-    
-    let input_text = payload.input.get(0).ok_or(StatusCode::BAD_REQUEST)?;
+    // OPTIMIZATION:
+    // 1. Extract the FIRST string instead of clearing everything.
+    //    Unlike clearing the whole vector, this doesn't require a mutable borrow
+    //    of the payload.input for later operations.
+    let input_text = payload.input.first().ok_or_else(|| {
+        tracing::error!("Empty input array received");
+        StatusCode::BAD_REQUEST
+    })?;
 
-    let mut buffer = Vec::with_capacity(1024); 
-    serde_json::to_writer(&mut buffer, &NovaRequest {
+    // 2. CRITICAL FIX: Clone the string now while the borrow is valid.
+    //    This creates a String value that is independent of the payload.
+    //    This allows us to discard the Vec reference completely.
+    let input_string_clone = input_text.clone();
+
+    // 3. Build Nova Payload
+    let nova_payload = NovaRequest {
         task_type: "SINGLE_EMBEDDING",
         params: NovaParams {
             embedding_purpose: "GENERIC_INDEX",
             dimension: 3072,
             text: NovaText {
                 truncation_mode: "END",
-                value: input_text,
+                // Now we use the clone instead of Cow::Borrowed(input_text)
+                value: Cow::Owned(input_string_clone),
             },
         },
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    };
 
-    let response = state.client
+    // 4. Serialize
+    let request_body = serde_json::to_vec(&nova_payload).map_err(|e| {
+        tracing::error!("Serialization error: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // 5. Invoke AWS SDK
+    let res = state
+        .client
         .invoke_model()
         .model_id("amazon.nova-2-multimodal-embeddings-v1:0")
         .content_type("application/json")
-        .body(Blob::new(buffer))
+        .accept("application/json")
+        .body(Blob::new(request_body))
         .send()
         .await
         .map_err(|e| {
-            tracing::error!(err = %e, "Bedrock dispatch failed");
-            StatusCode::BAD_GATEWAY
+            tracing::error!("AWS Bedrock Dispatch Error: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let mut out: NovaResponse = serde_json::from_slice(response.body().as_ref())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // 6. Parse AWS Response
+    let out: NovaResponse = serde_json::from_slice(res.body().as_ref()).map_err(|e| {
+        tracing::error!("Failed to parse Nova response: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    if out.embeddings.is_empty() {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    let embedding_vec = out.embeddings.swap_remove(0).embedding;
+    let embedding_entry = out.embeddings.into_iter().next().ok_or_else(|| {
+        tracing::error!("Nova returned empty embedding list");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    Ok(Json(OpenAiEmbeddingResponse {
+    // 7. Response
+    let response = OpenAiEmbeddingResponse {
         object: "list",
         model: "amazon.nova-2-multimodal-embeddings-v1:0",
         data: vec![OpenAiEmbeddingData {
             object: "embedding",
-            embedding: embedding_vec,
+            embedding: embedding_entry.embedding,
             index: 0,
         }],
         usage: OpenAiUsage {
             prompt_tokens: out.token_count,
             total_tokens: out.token_count,
         },
-    }))
+    };
+
+    Ok(Json(response))
 }

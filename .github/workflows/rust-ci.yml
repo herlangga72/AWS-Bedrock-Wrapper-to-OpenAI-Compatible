@@ -26,12 +26,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: rustfmt
 
       - name: Cache cargo + build
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "multi-platform"
           cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
       - name: Build (release)
         run: cargo build --release --target ${{ matrix.target }}

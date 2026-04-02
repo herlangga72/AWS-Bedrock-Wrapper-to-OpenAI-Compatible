@@ -1,7 +1,7 @@
 use crate::models::ChatRequest;
 use aws_sdk_bedrockruntime::types::{
-    ContentBlock, ConversationRole, Message as BedrockMessage, 
-    SystemContentBlock, InferenceConfiguration,
+    ContentBlock, ConversationRole, InferenceConfiguration, Message as BedrockMessage,
+    SystemContentBlock,
 };
 
 pub struct BedrockPayload {
@@ -21,7 +21,8 @@ pub fn build_bedrock_payload(mut req: ChatRequest) -> BedrockPayload {
                 if let Ok(msg) = BedrockMessage::builder()
                     .role(ConversationRole::User)
                     .content(ContentBlock::Text(m.content))
-                    .build() {
+                    .build()
+                {
                     bedrock_messages.push(msg);
                 }
             }
@@ -29,7 +30,8 @@ pub fn build_bedrock_payload(mut req: ChatRequest) -> BedrockPayload {
                 if let Ok(msg) = BedrockMessage::builder()
                     .role(ConversationRole::Assistant)
                     .content(ContentBlock::Text(m.content))
-                    .build() {
+                    .build()
+                {
                     bedrock_messages.push(msg);
                 }
             }
@@ -43,7 +45,8 @@ pub fn build_bedrock_payload(mut req: ChatRequest) -> BedrockPayload {
                 if let Ok(msg) = BedrockMessage::builder()
                     .role(ConversationRole::User)
                     .content(ContentBlock::Text(m.content))
-                    .build() {
+                    .build()
+                {
                     bedrock_messages.push(msg);
                 }
             }
@@ -60,7 +63,11 @@ pub fn build_bedrock_payload(mut req: ChatRequest) -> BedrockPayload {
     }
 
     BedrockPayload {
-        system: if system_blocks.is_empty() { None } else { Some(system_blocks) },
+        system: if system_blocks.is_empty() {
+            None
+        } else {
+            Some(system_blocks)
+        },
         messages: bedrock_messages,
         inference_config: config_builder.build(),
     }
