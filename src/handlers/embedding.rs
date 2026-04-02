@@ -77,7 +77,7 @@ pub struct OpenAiUsage {
 
 pub async fn handle_embeddings(
     State(state): State<AppState>,
-    mut payload: Json<OpenAiEmbeddingRequest>,
+    payload: Json<OpenAiEmbeddingRequest>,
 ) -> Result<Json<OpenAiEmbeddingResponse>, StatusCode> {
     // OPTIMIZATION:
     // 1. Extract the FIRST string instead of clearing everything.
