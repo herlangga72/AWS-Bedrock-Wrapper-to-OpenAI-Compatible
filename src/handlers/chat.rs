@@ -1,20 +1,32 @@
-use crate::models::{ChatRequest};
 use crate::handlers::{logger::ClickHouseLogger, message::build_bedrock_payload};
+use crate::models::ChatRequest;
 
 use aws_sdk_bedrockruntime::{
-    types::{ContentBlock, ContentBlockDelta, ConverseOutput as OutputEnum, ConverseStreamOutput as Out},
+    types::{
+        ContentBlock, ContentBlockDelta, ConverseOutput as OutputEnum, ConverseStreamOutput as Out,
+    },
     Client as RuntimeClient,
 };
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Json,
 };
-use axum_extra::{headers::{authorization::Bearer, Authorization}, TypedHeader};
+use axum_extra::{
+    headers::{authorization::Bearer, Authorization},
+    TypedHeader,
+};
 use futures_util::Stream;
 use serde::Serialize;
-use std::{convert::Infallible, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{
+    convert::Infallible,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -114,21 +126,20 @@ pub async fn chat_handler(
     headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Response {
-// 1. Extract token and authenticate immediately to avoid keeping the header in scope
+    // 1. Extract token and authenticate immediately to avoid keeping the header in scope
     let temp_user_email = match auth {
-        Some(TypedHeader(Authorization(bearer))) => {
-            match state.auth.authenticate(bearer.token()) {
-                Ok(email) => email,
-                Err(_) => return StatusCode::FORBIDDEN.into_response(),
-            }
-        }
+        Some(TypedHeader(Authorization(bearer))) => match state.auth.authenticate(bearer.token()) {
+            Ok(email) => email,
+            Err(_) => return StatusCode::FORBIDDEN.into_response(),
+        },
         None => return (StatusCode::UNAUTHORIZED, "Missing API Key").into_response(),
     };
 
     // 2. Determine user identity using borrowing
     // Avoid .to_string() until the very last moment or if the downstream requires ownership
     let user_email = if temp_user_email == "chat" {
-        headers.get("x-openwebui-user-email")
+        headers
+            .get("x-openwebui-user-email")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("anonymous")
             .to_string()
@@ -137,13 +148,14 @@ pub async fn chat_handler(
     };
 
     // 3. Extract Message ID with fallback
-    let message_id = headers.get("x-openwebui-message-id")
+    let message_id = headers
+        .get("x-openwebui-message-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned()) // Preferred over to_string() for explicit intent
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    
+
     let is_stream = req.stream.unwrap_or(true);
-    
+
     // 4. Zero-cost Engine initialization
     let engine = BedrockEngine::new(req);
     let client = Arc::new(state.client.clone());
@@ -170,10 +182,12 @@ fn stream_converse(
     let start_time = tokio::time::Instant::now(); // Start timer
     let mut ttft_ms: Option<u64> = None;
 
-
     let request_id = message_id;
 
-    let created = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     async_stream::stream! {
         let sdk_call = client.converse_stream()
@@ -198,53 +212,53 @@ fn stream_converse(
                     }
                     if let Some(ContentBlockDelta::Text(t)) = delta.delta {
                         let choices = [
-                            ChunkChoice { 
-                                index: 0, 
-                                delta: ChunkDelta { 
-                                    content: Some(&t) 
-                                }, 
-                                finish_reason: None 
+                            ChunkChoice {
+                                index: 0,
+                                delta: ChunkDelta {
+                                    content: Some(&t)
+                                },
+                                finish_reason: None
                             }];
-                        let chunk = ChatChunk { 
-                            id: &request_id, 
-                            object: "chat.completion.chunk", 
-                            created, 
-                            model: &engine.model_name, 
-                            choices: &choices, 
-                            usage: None 
+                        let chunk = ChatChunk {
+                            id: &request_id,
+                            object: "chat.completion.chunk",
+                            created,
+                            model: &engine.model_name,
+                            choices: &choices,
+                            usage: None
                         };
-                        if let Ok(j) = serde_json::to_string(&chunk) { 
-                            yield Ok(Event::default().data(j)); 
+                        if let Ok(j) = serde_json::to_string(&chunk) {
+                            yield Ok(Event::default().data(j));
                         }
                     }
                 }
-                Out::Metadata(m) => if let Some(u) = m.usage { 
+                Out::Metadata(m) => if let Some(u) = m.usage {
                     metrics = (
-                        u.input_tokens as u32, 
+                        u.input_tokens as u32,
                         u.output_tokens as u32
-                    ); 
+                    );
                 }
                 Out::MessageStop(stop) => {
                     let choices = [
-                        ChunkChoice { 
-                            index: 0, 
-                            delta: ChunkDelta { 
-                                content: None 
-                            }, 
+                        ChunkChoice {
+                            index: 0,
+                            delta: ChunkDelta {
+                                content: None
+                            },
                             finish_reason: Some(
                                 format!("{:?}", stop.stop_reason).to_lowercase()
-                            ) 
+                            )
                         }];
-                    let chunk = ChatChunk { 
-                        id: &request_id, 
-                        object: "chat.completion.chunk", 
-                        created, 
-                        model: &engine.model_name, 
-                        choices: &choices, 
-                        usage: None 
+                    let chunk = ChatChunk {
+                        id: &request_id,
+                        object: "chat.completion.chunk",
+                        created,
+                        model: &engine.model_name,
+                        choices: &choices,
+                        usage: None
                     };
-                    if let Ok(j) = serde_json::to_string(&chunk) { 
-                        yield Ok(Event::default().data(j)); 
+                    if let Ok(j) = serde_json::to_string(&chunk) {
+                        yield Ok(Event::default().data(j));
                     }
                 }
                 _ => {}
@@ -259,23 +273,23 @@ fn stream_converse(
             let gen_time_sec = (total_duration_ms.saturating_sub(ttft) as f64) / 1000.0;
             let tps = if gen_time_sec > 0.0 { c as f64 / gen_time_sec } else { 0.0 };
 
-            let usage_chunk = ChatChunk { 
-                id: &request_id, 
-                object: "chat.completion.chunk", 
-                created, 
-                model: &engine.model_name, 
-                choices: &[], 
-                usage: Some(Usage { 
-                    input_tokens: p, 
-                    output_tokens: c, 
+            let usage_chunk = ChatChunk {
+                id: &request_id,
+                object: "chat.completion.chunk",
+                created,
+                model: &engine.model_name,
+                choices: &[],
+                usage: Some(Usage {
+                    input_tokens: p,
+                    output_tokens: c,
                     total_tokens: p + c,
                     ttft_ms: Some(ttft),
                     latency_ms: Some(total_duration_ms),
-                    tokens_per_second: Some((tps * 100.0).round() / 100.0), 
-                }) 
+                    tokens_per_second: Some((tps * 100.0).round() / 100.0),
+                })
             };
-            if let Ok(j) = serde_json::to_string(&usage_chunk) { 
-                yield Ok(Event::default().data(j)); 
+            if let Ok(j) = serde_json::to_string(&usage_chunk) {
+                yield Ok(Event::default().data(j));
             }
             spawn_log(logger, user_email, engine.model_name, p, c);
         }
@@ -295,7 +309,8 @@ async fn non_stream(
 ) -> Response {
     let start_time = tokio::time::Instant::now();
 
-    let sdk_call = client.converse()
+    let sdk_call = client
+        .converse()
         .model_id(&engine.model_id)
         .set_messages(Some(engine.payload.messages))
         .set_system(engine.payload.system)
@@ -307,13 +322,28 @@ async fn non_stream(
         _ => return (StatusCode::BAD_GATEWAY, "Bedrock Error").into_response(),
     };
 
-    let p = resp.usage.as_ref().map(|u| u.input_tokens as u32).unwrap_or(0);
-    let c = resp.usage.as_ref().map(|u| u.output_tokens as u32).unwrap_or(0);
+    let p = resp
+        .usage
+        .as_ref()
+        .map(|u| u.input_tokens as u32)
+        .unwrap_or(0);
+    let c = resp
+        .usage
+        .as_ref()
+        .map(|u| u.output_tokens as u32)
+        .unwrap_or(0);
 
-    let content = resp.output
-        .and_then(|o| match o { OutputEnum::Message(m) => Some(m), _ => None })
+    let content = resp
+        .output
+        .and_then(|o| match o {
+            OutputEnum::Message(m) => Some(m),
+            _ => None,
+        })
         .and_then(|m| m.content.into_iter().next())
-        .and_then(|cb| match cb { ContentBlock::Text(t) => Some(t), _ => None })
+        .and_then(|cb| match cb {
+            ContentBlock::Text(t) => Some(t),
+            _ => None,
+        })
         .unwrap_or_default();
 
     spawn_log(logger, user_email, engine.model_name.clone(), p, c);
@@ -322,26 +352,44 @@ async fn non_stream(
 
     let total_duration_ms = start_time.elapsed().as_millis() as u64;
 
-    let (p, c) = (resp.usage.as_ref().map(|u| u.input_tokens as u32).unwrap_or(0), 
-                  resp.usage.as_ref().map(|u| u.output_tokens as u32).unwrap_or(0));
+    let (p, c) = (
+        resp.usage
+            .as_ref()
+            .map(|u| u.input_tokens as u32)
+            .unwrap_or(0),
+        resp.usage
+            .as_ref()
+            .map(|u| u.output_tokens as u32)
+            .unwrap_or(0),
+    );
 
-    let tps = if total_duration_ms > 0 { (c as f64) / (total_duration_ms as f64 / 1000.0) } else { 0.0 };
-    
+    let tps = if total_duration_ms > 0 {
+        (c as f64) / (total_duration_ms as f64 / 1000.0)
+    } else {
+        0.0
+    };
+
     let full_resp = FullResponse {
         id: &request_id,
         object: "chat.completion",
-        created: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+        created: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
         model: &engine.model_name,
         choices: [FullChoice {
             index: 0,
-            message: FullMessage { role: "assistant", content: &content },
+            message: FullMessage {
+                role: "assistant",
+                content: &content,
+            },
             finish_reason: "stop",
         }],
-        usage: Usage { 
-            input_tokens: p, 
-            output_tokens: c, 
+        usage: Usage {
+            input_tokens: p,
+            output_tokens: c,
             total_tokens: p + c,
-            ttft_ms: Some(total_duration_ms), 
+            ttft_ms: Some(total_duration_ms),
             latency_ms: Some(total_duration_ms),
             tokens_per_second: Some((tps * 100.0).round() / 100.0),
         },
@@ -355,5 +403,7 @@ async fn non_stream(
 
 // Shared Helper
 fn spawn_log(logger: Arc<ClickHouseLogger>, email: String, model: String, p: u32, c: u32) {
-    tokio::spawn(async move { let _ = logger.log_usage(&email, &model, p, c); });
+    tokio::spawn(async move {
+        let _ = logger.log_usage(&email, &model, p, c);
+    });
 }

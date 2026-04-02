@@ -17,7 +17,6 @@ pub struct Message {
     pub content: String,
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelData {
     pub id: String,

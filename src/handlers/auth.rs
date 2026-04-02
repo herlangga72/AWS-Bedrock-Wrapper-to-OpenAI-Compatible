@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
-use std::sync::{Arc, Mutex};
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 pub enum AuthError {
@@ -36,8 +36,8 @@ impl Authentication {
             [],
         )?;
 
-        Ok(Self { 
-            conn: Arc::new(Mutex::new(conn)) 
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
         })
     }
 
@@ -46,17 +46,18 @@ impl Authentication {
         conn.execute(
             "INSERT OR IGNORE INTO api_keys (api_key, email) VALUES (?1, ?2)",
             params![api_key, email],
-        ).map_err(AuthError::DbError)?;
+        )
+        .map_err(AuthError::DbError)?;
         Ok(())
     }
 
     pub fn authenticate(&self, provided_key: &str) -> std::result::Result<String, AuthError> {
         let conn = self.conn.lock().map_err(|_| AuthError::LockError)?;
-        
+
         let result = conn.query_row(
             "SELECT email FROM api_keys WHERE api_key = ?1",
             params![provided_key],
-            |row| row.get::<_, String>(0)
+            |row| row.get::<_, String>(0),
         );
 
         match result {

@@ -21,13 +21,14 @@ pub struct ClickHouseLogger {
 
 impl ClickHouseLogger {
     pub fn new() -> Self {
-        let url = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
+        let url =
+            std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
         let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
         let pass = std::env::var("CLICKHOUSE_PASSWORD").expect("CLICKHOUSE_PASSWORD must be set");
         let db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "default".to_string());
 
         let (tx, mut rx) = mpsc::channel::<LogEntry>(4096);
-        
+
         // Configure the client once
         let client = Client::default()
             .with_url(url)
@@ -68,7 +69,7 @@ impl ClickHouseLogger {
             Ok(ins) => ins,
             Err(e) => {
                 eprintln!("[ClickHouse] Connection failed: {:?}", e);
-                batch.clear(); 
+                batch.clear();
                 return;
             }
         };

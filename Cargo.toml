@@ -26,5 +26,5 @@ axum-extra = { version = "0.12.5", features = ["typed-header"] }
 bytes = "1.11.1"
 clickhouse = { version = "0.14.3", features = ["chrono"] }
 arc-swap = "1.9.0"
-rusqlite = "0.39.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
 
