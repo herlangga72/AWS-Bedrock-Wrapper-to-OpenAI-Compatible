@@ -1,10 +1,13 @@
+//! Logging domain types - Usage logging to ClickHouse
+
 use clickhouse::{Client, Row};
 use serde::Serialize;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{interval, MissedTickBehavior};
 
-#[derive(Row, Serialize)]
+/// Log entry for usage tracking
+#[derive(Row, Serialize, Clone)]
 pub struct LogEntry {
     #[serde(with = "clickhouse::serde::chrono::datetime")]
     pub timestamp: chrono::DateTime<chrono::Utc>,
@@ -14,6 +17,7 @@ pub struct LogEntry {
     pub output_tokens: u32,
 }
 
+/// ClickHouse logger for batched usage logging
 #[derive(Clone)]
 pub struct ClickHouseLogger {
     tx: mpsc::Sender<LogEntry>,
@@ -29,7 +33,6 @@ impl ClickHouseLogger {
 
         let (tx, mut rx) = mpsc::channel::<LogEntry>(4096);
 
-        // Configure the client once
         let client = Client::default()
             .with_url(url)
             .with_user(user)
@@ -64,7 +67,6 @@ impl ClickHouseLogger {
     }
 
     async fn flush(client: &Client, batch: &mut Vec<LogEntry>) {
-        // Use the turbofish <LogEntry> to satisfy the compiler
         let mut inserter = match client.insert::<LogEntry>("chat_logs").await {
             Ok(ins) => ins,
             Err(e) => {

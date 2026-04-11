@@ -3,6 +3,11 @@ name = "aws-bedrock-translation-to-openai"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["unit-tests"]
+unit-tests = []
+integration-tests = []
+
 [dependencies]
 axum = { version = "0.8.8", default-features = false, features = ["tokio", "http1", "json", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "full"] }
@@ -27,4 +32,12 @@ bytes = "1.11.1"
 clickhouse = { version = "0.14.3", features = ["chrono"] }
 arc-swap = "1.9.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
+[dev-dependencies]
+mockito = "1"
+tokio-test = "0.4"
+tempfile = "3"
+
+[profile.dev]
+opt-level = 1

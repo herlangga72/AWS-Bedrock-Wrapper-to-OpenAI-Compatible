@@ -1,7 +1,10 @@
+//! Auth domain types - API key authentication
+
 use rusqlite::{params, Connection};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+/// Authentication error types
 #[derive(Debug)]
 pub enum AuthError {
     DbError(rusqlite::Error),
@@ -19,6 +22,9 @@ impl fmt::Display for AuthError {
     }
 }
 
+impl std::error::Error for AuthError {}
+
+/// Authentication service for API key validation
 #[derive(Clone)]
 pub struct Authentication {
     conn: Arc<Mutex<Connection>>,
@@ -51,7 +57,7 @@ impl Authentication {
         Ok(())
     }
 
-    pub fn authenticate(&self, provided_key: &str) -> std::result::Result<String, AuthError> {
+    pub fn authenticate(&self, provided_key: &str) -> Result<String, AuthError> {
         let conn = self.conn.lock().map_err(|_| AuthError::LockError)?;
 
         let result = conn.query_row(

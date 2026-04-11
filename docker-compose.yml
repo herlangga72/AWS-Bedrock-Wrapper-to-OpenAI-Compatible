@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # Application server
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - DEFAULT_API_KEY=test-key
+      - DB_API_KEY_LOCATION_SQLITE=/data/api_keys.db
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=password
+      - CLICKHOUSE_DB=default
+      - CLOUDFLARE_ACCOUNT_ID=test-account
+      - CLOUDFLARE_API_TOKEN=test-token
+    volumes:
+      - ./data:/data
+      - ./tests/integration:/tests
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - test-network
+
+  # ClickHouse for usage logging
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8.2
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=password
+      - CLICKHOUSE_DB=default
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - test-network
+
+  # LocalStack for AWS mocking
+  localstack:
+    image: localstack/localstack:4.0.3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=bedrock,bedrockruntime
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack
+      - EAGER_SERVICE_LOADING=1
+    volumes:
+      - localstack-data:/tmp/localstack
+      - ./docker/localstack:/docker-entrypoint-initaws.d
+    networks:
+      - test-network
+
+  # Integration test runner
+  integration-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.tests
+    environment:
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=password
+      - CLICKHOUSE_DB=default
+      - LOCALSTACK_URL=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+    networks:
+      - test-network
+
+volumes:
+  localstack-data:
+
+networks:
+  test-network:
+    driver: bridge
