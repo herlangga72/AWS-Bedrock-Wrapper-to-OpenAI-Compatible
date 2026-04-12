@@ -37,6 +37,53 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const MIN_TEMPERATURE: f32 = 0.0;
+const MAX_TEMPERATURE: f32 = 2.0;
+
+/// Error response structure for consistent API errors
+#[derive(Serialize)]
+struct ErrorResponse<'a> {
+    error: &'a str,
+    code: u16,
+}
+
+/// Validate request parameters early
+fn validate_chat_request(req: &ChatRequest) -> Result<(), String> {
+    // Validate model is not empty
+    if req.model.is_empty() {
+        return Err("model field cannot be empty".to_string());
+    }
+
+    // Validate messages array is not empty
+    if req.messages.is_empty() {
+        return Err("messages array cannot be empty".to_string());
+    }
+
+    // Validate temperature range if provided
+    if let Some(temp) = req.temperature {
+        if temp < MIN_TEMPERATURE || temp > MAX_TEMPERATURE {
+            return Err(format!(
+                "temperature must be between {:.1} and {:.1}, got {:.1}",
+                MIN_TEMPERATURE, MAX_TEMPERATURE, temp
+            ));
+        }
+    }
+
+    // Validate each message has valid role and content
+    for (i, msg) in req.messages.iter().enumerate() {
+        match msg.role.as_str() {
+            "user" | "assistant" | "system" => {}
+            other => {
+                return Err(format!(
+                    "messages[{}].role must be 'user', 'assistant', or 'system', got '{}'",
+                    i, other
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// Normalize model name to show provider clearly in responses
 fn normalize_model_name(model: &str) -> String {
@@ -115,12 +162,36 @@ pub async fn chat_handler(
     headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Response {
+    // Validate request parameters early
+    if let Err(e) = validate_chat_request(&req) {
+        let err_resp = ErrorResponse {
+            error: &e,
+            code: StatusCode::BAD_REQUEST.as_u16(),
+        };
+        let json = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error":"Invalid request"}"#.to_string());
+        return (StatusCode::BAD_REQUEST, [("content-type", "application/json")], json).into_response();
+    }
+
     let temp_user_email = match auth {
         Some(TypedHeader(Authorization(bearer))) => match state.auth.authenticate(bearer.token()) {
             Ok(email) => email,
-            Err(_) => return StatusCode::FORBIDDEN.into_response(),
+            Err(_) => {
+                let err_resp = ErrorResponse {
+                    error: "Invalid API Key",
+                    code: StatusCode::UNAUTHORIZED.as_u16(),
+                };
+                let json = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error":"Unauthorized"}"#.to_string());
+                return (StatusCode::UNAUTHORIZED, [("content-type", "application/json")], json).into_response();
+            }
         },
-        None => return (StatusCode::UNAUTHORIZED, "Missing API Key").into_response(),
+        None => {
+            let err_resp = ErrorResponse {
+                error: "Missing API Key",
+                code: StatusCode::UNAUTHORIZED.as_u16(),
+            };
+            let json = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error":"Unauthorized"}"#.to_string());
+            return (StatusCode::UNAUTHORIZED, [("content-type", "application/json")], json).into_response();
+        }
     };
 
     let user_email = if temp_user_email == "chat" {
