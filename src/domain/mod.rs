@@ -6,7 +6,7 @@
 //! - `auth` - API key authentication
 //! - `logging` - Usage logging
 
+pub mod auth;
 pub mod chat;
 pub mod embedding;
-pub mod auth;
 pub mod logging;

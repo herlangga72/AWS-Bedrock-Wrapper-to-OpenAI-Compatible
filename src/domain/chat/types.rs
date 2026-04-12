@@ -18,8 +18,10 @@ pub struct ChatRequest {
     #[serde(default)]
     pub presence_penalty: Option<f32>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub logit_bias: Option<std::collections::HashMap<u32, f32>>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub user: Option<String>,
     // Model-specific params
     #[serde(default)]
@@ -77,6 +79,7 @@ pub struct ReasoningContent {
 
 /// Usage statistics for chat completion
 #[derive(Serialize, Clone)]
+#[allow(dead_code)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -89,56 +92,6 @@ pub struct Usage {
     pub latency_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens_per_second: Option<f64>,
-}
-
-/// Full non-streaming chat completion response
-#[derive(Serialize)]
-pub struct FullResponse<'a> {
-    pub id: &'a str,
-    pub object: &'static str,
-    pub created: u64,
-    pub model: &'a str,
-    pub choices: [FullChoice<'a>; 1],
-    pub usage: Usage,
-}
-
-#[derive(Serialize)]
-pub struct FullChoice<'a> {
-    pub index: u32,
-    pub message: FullMessage<'a>,
-    pub finish_reason: &'static str,
-}
-
-#[derive(Serialize)]
-pub struct FullMessage<'a> {
-    pub role: &'static str,
-    pub content: &'a str,
-}
-
-/// Streaming chunk for chat completion
-#[derive(Serialize)]
-pub struct ChatChunk<'a> {
-    pub id: &'a str,
-    pub object: &'static str,
-    pub created: u64,
-    pub model: &'a str,
-    pub choices: &'a [ChunkChoice<'a>],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Usage>,
-}
-
-#[derive(Serialize)]
-pub struct ChunkChoice<'a> {
-    pub index: u32,
-    pub delta: ChunkDelta<'a>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct ChunkDelta<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<&'a str>,
 }
 
 // =============================================================================

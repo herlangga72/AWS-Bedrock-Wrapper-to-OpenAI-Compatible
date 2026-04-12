@@ -101,6 +101,7 @@ impl<'a> NovaRequest<'a> {
         }
     }
 
+    #[cfg(test)]
     pub fn with_dimension(mut self, dimension: u32) -> Self {
         self.params.dimension = dimension;
         self
@@ -177,13 +178,11 @@ mod tests {
         let resp = OpenAiEmbeddingResponse {
             object: "list",
             model: "amazon.nova-2-embeddings-v1:0",
-            data: vec![
-                OpenAiEmbeddingData {
-                    object: "embedding",
-                    embedding: vec![0.1, 0.2, 0.3],
-                    index: 0,
-                },
-            ],
+            data: vec![OpenAiEmbeddingData {
+                object: "embedding",
+                embedding: vec![0.1, 0.2, 0.3],
+                index: 0,
+            }],
             usage: OpenAiUsage {
                 prompt_tokens: 5,
                 total_tokens: 5,

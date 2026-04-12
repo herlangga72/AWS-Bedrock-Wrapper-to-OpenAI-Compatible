@@ -1,61 +1,38 @@
 //! Reasoning handler for DeepSeek R1 and similar models on AWS Bedrock
 //! Uses Converse API but processes reasoningContent from responses
 
-use crate::domain::chat::{get_model_capabilities, ChatRequest, Content, ContentBlock};
+use crate::domain::chat::{ChatRequest, Content, ContentBlock};
 use crate::domain::logging::ClickHouseLogger;
 use crate::infrastructure::bedrock::converse::build_converse_payload;
 use crate::shared::app_state::AppState;
+use crate::shared::logging::spawn_log;
 
 use aws_sdk_bedrockruntime::{
-    types::{ContentBlock as BContentBlock, ContentBlockDelta, ConverseOutput as OutputEnum, ConversationRole, InferenceConfiguration, Message as BedrockMessage, SystemContentBlock},
+    types::{ContentBlock as BContentBlock, ContentBlockDelta, ConverseOutput as OutputEnum},
     Client as RuntimeClient,
 };
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Json,
 };
-use axum_extra::{headers::{authorization::Bearer, Authorization}, TypedHeader};
+use axum_extra::{
+    headers::{authorization::Bearer, Authorization},
+    TypedHeader,
+};
 use futures_util::Stream;
-use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use serde::Serialize;
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use super::chat_handler::Usage;
-
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-
-// Response structure for reasoning models
-#[derive(Deserialize, Debug)]
-struct ReasoningResponse {
-    content: Vec<ReasoningContentBlock>,
-    stop_reason: String,
-    usage: ReasoningUsage,
-}
-
-#[derive(Deserialize, Debug)]
-struct ReasoningContentBlock {
-    #[serde(rename = "type")]
-    block_type: String,
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    reasoning_content: Option<ReasoningText>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ReasoningText {
-    reasoning_text: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct ReasoningUsage {
-    input_tokens: u32,
-    output_tokens: u32,
-    total_tokens: u32,
-}
 
 // Response builders
 #[derive(Serialize)]
@@ -114,12 +91,20 @@ async fn reasoning_handler(
     };
 
     let user_email = if temp_user_email == "chat" {
-        headers.get("x-openwebui-user-email").and_then(|v| v.to_str().ok()).unwrap_or("anonymous").to_string()
+        headers
+            .get("x-openwebui-user-email")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("anonymous")
+            .to_string()
     } else {
         temp_user_email
     };
 
-    let message_id = headers.get("x-openwebui-message-id").and_then(|v| v.to_str().ok()).map(|s| s.to_owned()).unwrap_or_else(|| Uuid::new_v4().to_string());
+    let message_id = headers
+        .get("x-openwebui-message-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let is_stream = req.stream.unwrap_or(true);
     let client = Arc::new(state.client.clone());
     let logger = Arc::new(state.logger.clone());
@@ -131,10 +116,25 @@ async fn reasoning_handler(
         .unwrap_or(false);
 
     if is_stream {
-        let s = stream_reasoning(client, req, logger, user_email, message_id, include_reasoning);
+        let s = stream_reasoning(
+            client,
+            req,
+            logger,
+            user_email,
+            message_id,
+            include_reasoning,
+        );
         Sse::new(s).keep_alive(KeepAlive::default()).into_response()
     } else {
-        non_stream_reasoning(client, req, logger, user_email, message_id, include_reasoning).await
+        non_stream_reasoning(
+            client,
+            req,
+            logger,
+            user_email,
+            message_id,
+            include_reasoning,
+        )
+        .await
     }
 }
 
@@ -165,8 +165,16 @@ async fn non_stream_reasoning(
         _ => return (StatusCode::BAD_GATEWAY, "Bedrock Reasoning Error").into_response(),
     };
 
-    let p = resp.usage.as_ref().map(|u| u.input_tokens as u32).unwrap_or(0);
-    let c = resp.usage.as_ref().map(|u| u.output_tokens as u32).unwrap_or(0);
+    let p = resp
+        .usage
+        .as_ref()
+        .map(|u| u.input_tokens as u32)
+        .unwrap_or(0);
+    let c = resp
+        .usage
+        .as_ref()
+        .map(|u| u.output_tokens as u32)
+        .unwrap_or(0);
 
     let mut response_text = String::new();
     let mut reasoning_text = String::new();
@@ -195,7 +203,10 @@ async fn non_stream_reasoning(
         ReasoningFullResponse {
             id: message_id,
             object: "chat.completion",
-            created: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+            created: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
             model: model_name,
             choices: [ReasoningChoice {
                 index: 0,
@@ -231,7 +242,10 @@ async fn non_stream_reasoning(
         ReasoningFullResponse {
             id: message_id,
             object: "chat.completion",
-            created: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+            created: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
             model: model_name,
             choices: [ReasoningChoice {
                 index: 0,
@@ -269,7 +283,10 @@ fn stream_reasoning(
     let start_time = tokio::time::Instant::now();
     let request_id = _message_id;
 
-    let created = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     let payload = build_converse_payload(&req);
 
@@ -365,10 +382,4 @@ fn stream_reasoning(
 
         yield Ok(Event::default().data("[DONE]"));
     }
-}
-
-fn spawn_log(logger: Arc<ClickHouseLogger>, email: String, model: String, p: u32, c: u32) {
-    tokio::spawn(async move {
-        let _ = logger.log_usage(&email, &model, p, c);
-    });
 }

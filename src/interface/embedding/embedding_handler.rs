@@ -1,6 +1,9 @@
 //! Embedding handler using AWS Nova 2
 
-use crate::domain::embedding::{NovaRequest, NovaResponse, OpenAiEmbeddingData, OpenAiEmbeddingRequest, OpenAiEmbeddingResponse, OpenAiUsage};
+use crate::domain::embedding::{
+    NovaRequest, NovaResponse, OpenAiEmbeddingData, OpenAiEmbeddingRequest,
+    OpenAiEmbeddingResponse, OpenAiUsage,
+};
 use crate::shared::app_state::AppState;
 
 use aws_sdk_bedrockruntime::primitives::Blob;

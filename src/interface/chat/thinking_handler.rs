@@ -3,16 +3,22 @@
 
 use crate::domain::chat::{get_model_capabilities, ChatRequest, Content, ContentBlock};
 use crate::domain::logging::ClickHouseLogger;
-use crate::infrastructure::bedrock::invoke::{build_thinking_request, invoke_thinking_model, parse_thinking_params, ThinkingResponse};
-use crate::interface::chat::reasoning_handler::chat_with_reasoning_handler;
+use crate::infrastructure::bedrock::invoke::{
+    build_thinking_request, invoke_thinking_model, parse_thinking_params,
+};
 use crate::interface::chat::chat_handler;
+use crate::interface::chat::reasoning_handler::chat_with_reasoning_handler;
 use crate::shared::app_state::AppState;
+use crate::shared::logging::spawn_log;
 
 use aws_sdk_bedrockruntime::Client as RuntimeClient;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Json,
 };
 use axum_extra::{
@@ -21,13 +27,14 @@ use axum_extra::{
 };
 use futures_util::Stream;
 use serde::Serialize;
-use std::{convert::Infallible, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
-use tokio::time::timeout;
+use std::{
+    convert::Infallible,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
 
 use super::chat_handler::Usage;
-
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 // Response builders
 #[derive(Serialize)]
@@ -77,7 +84,9 @@ pub async fn chat_with_thinking_handler(
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
 
-    let enabled = req.thinking.as_ref()
+    let enabled = req
+        .thinking
+        .as_ref()
         .map(|t| t.enabled.unwrap_or(false))
         .unwrap_or(false);
 
@@ -115,12 +124,20 @@ async fn thinking_handler(
     };
 
     let user_email = if temp_user_email == "chat" {
-        headers.get("x-openwebui-user-email").and_then(|v| v.to_str().ok()).unwrap_or("anonymous").to_string()
+        headers
+            .get("x-openwebui-user-email")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("anonymous")
+            .to_string()
     } else {
         temp_user_email
     };
 
-    let message_id = headers.get("x-openwebui-message-id").and_then(|v| v.to_str().ok()).map(|s| s.to_owned()).unwrap_or_else(|| Uuid::new_v4().to_string());
+    let message_id = headers
+        .get("x-openwebui-message-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let is_stream = req.stream.unwrap_or(true);
     let client = Arc::new(state.client.clone());
     let logger = Arc::new(state.logger.clone());
@@ -156,8 +173,16 @@ async fn non_stream_thinking(
 
     for block in &resp.content {
         match block.r#type.as_str() {
-            "thinking" => if let Some(t) = &block.thinking { thinking_text.push_str(t); },
-            "text" => if let Some(t) = &block.text { response_text.push_str(t); },
+            "thinking" => {
+                if let Some(t) = &block.thinking {
+                    thinking_text.push_str(t);
+                }
+            }
+            "text" => {
+                if let Some(t) = &block.text {
+                    response_text.push_str(t);
+                }
+            }
             _ => {}
         }
     }
@@ -174,20 +199,41 @@ async fn non_stream_thinking(
         tokens_per_second: None,
     };
 
-    spawn_log(logger, user_email, model_name.clone(), resp.usage.input_tokens, resp.usage.output_tokens);
+    spawn_log(
+        logger,
+        user_email,
+        model_name.clone(),
+        resp.usage.input_tokens,
+        resp.usage.output_tokens,
+    );
 
     let full_resp = ThinkingFullResponse {
         id: message_id,
         object: "chat.completion",
-        created: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+        created: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
         model: model_name,
         choices: [ThinkingChoice {
             index: 0,
             message: ThinkingMessageResponse {
                 role: "assistant",
                 content: Content::Blocks(vec![
-                    ContentBlock { r#type: "thinking".to_string(), text: None, thinking: Some(thinking_text), signature: None, reasoning_content: None },
-                    ContentBlock { r#type: "text".to_string(), text: Some(response_text), thinking: None, signature: None, reasoning_content: None },
+                    ContentBlock {
+                        r#type: "thinking".to_string(),
+                        text: None,
+                        thinking: Some(thinking_text),
+                        signature: None,
+                        reasoning_content: None,
+                    },
+                    ContentBlock {
+                        r#type: "text".to_string(),
+                        text: Some(response_text),
+                        thinking: None,
+                        signature: None,
+                        reasoning_content: None,
+                    },
                 ]),
             },
             finish_reason: "stop",
@@ -206,7 +252,7 @@ fn non_stream_as_stream(
     req: ChatRequest,
     logger: Arc<ClickHouseLogger>,
     user_email: String,
-    message_id: String,
+    _message_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let model_id = req.model.clone().replace("bedrock/", "");
     let model_name = req.model.clone();
@@ -262,10 +308,4 @@ fn non_stream_as_stream(
 
         yield Ok(Event::default().data("[DONE]"));
     }
-}
-
-fn spawn_log(logger: Arc<ClickHouseLogger>, email: String, model: String, p: u32, c: u32) {
-    tokio::spawn(async move {
-        let _ = logger.log_usage(&email, &model, p, c);
-    });
 }

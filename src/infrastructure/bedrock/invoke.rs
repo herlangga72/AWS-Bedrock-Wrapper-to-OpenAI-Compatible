@@ -3,10 +3,9 @@
 use aws_sdk_bedrock::primitives::Blob;
 use aws_sdk_bedrockruntime::Client as RuntimeClient;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 use std::time::Duration;
 
-use crate::domain::chat::{ChatRequest, Content, ThinkingRequest};
+use crate::domain::chat::{ChatRequest, Content};
 
 const THINKING_VERSION: &str = "bedrock-2023-05-31";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
@@ -58,8 +57,6 @@ struct ThinkingContentBlock<'a> {
 #[derive(Deserialize, Debug)]
 pub struct ThinkingResponse {
     pub content: Vec<ResponseContentBlock>,
-    #[serde(default)]
-    stop_reason: String,
     pub usage: ResponseUsage,
 }
 
@@ -70,8 +67,6 @@ pub struct ResponseContentBlock {
     pub text: Option<String>,
     #[serde(default)]
     pub thinking: Option<String>,
-    #[serde(default)]
-    signature: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -86,33 +81,46 @@ pub struct ResponseUsage {
 // =============================================================================
 
 /// Build thinking request body for Claude models
-pub fn build_thinking_request(req: &ChatRequest, max_tokens: u32, budget_tokens: u32) -> ThinkingRequestBody<'_> {
+pub fn build_thinking_request(
+    req: &ChatRequest,
+    max_tokens: u32,
+    budget_tokens: u32,
+) -> ThinkingRequestBody<'_> {
     let thinking_block = Some(ThinkingBlock {
         r#type: "enabled",
         budget_tokens,
     });
 
-    let messages: Vec<ThinkingMessage<'_>> = req.messages.iter().map(|m| {
-        let role = match m.role.as_str() {
-            "user" => "user",
-            "assistant" => "assistant",
-            _ => "user",
-        };
-        let content = match &m.content {
-            Content::Text(text) => ThinkingContent::Text(text.as_str()),
-            Content::Blocks(blocks) => {
-                let blocks: Vec<ThinkingContentBlock<'_>> = blocks.iter().map(|b| {
-                    ThinkingContentBlock {
-                        r#type: if b.thinking.is_some() { "thinking" } else { "text" },
-                        text: b.text.as_deref(),
-                        thinking: b.thinking.as_deref(),
-                    }
-                }).collect();
-                ThinkingContent::Blocks(blocks)
-            }
-        };
-        ThinkingMessage { role, content }
-    }).collect();
+    let messages: Vec<ThinkingMessage<'_>> = req
+        .messages
+        .iter()
+        .map(|m| {
+            let role = match m.role.as_str() {
+                "user" => "user",
+                "assistant" => "assistant",
+                _ => "user",
+            };
+            let content = match &m.content {
+                Content::Text(text) => ThinkingContent::Text(text.as_str()),
+                Content::Blocks(blocks) => {
+                    let blocks: Vec<ThinkingContentBlock<'_>> = blocks
+                        .iter()
+                        .map(|b| ThinkingContentBlock {
+                            r#type: if b.thinking.is_some() {
+                                "thinking"
+                            } else {
+                                "text"
+                            },
+                            text: b.text.as_deref(),
+                            thinking: b.thinking.as_deref(),
+                        })
+                        .collect();
+                    ThinkingContent::Blocks(blocks)
+                }
+            };
+            ThinkingMessage { role, content }
+        })
+        .collect();
 
     ThinkingRequestBody {
         anthropic_version: THINKING_VERSION,
@@ -124,7 +132,11 @@ pub fn build_thinking_request(req: &ChatRequest, max_tokens: u32, budget_tokens:
 
 /// Parse thinking request from ChatRequest
 pub fn parse_thinking_params(req: &ChatRequest) -> (u32, u32) {
-    let budget_tokens = req.thinking.as_ref().and_then(|t| t.budget_tokens).unwrap_or(4000);
+    let budget_tokens = req
+        .thinking
+        .as_ref()
+        .and_then(|t| t.budget_tokens)
+        .unwrap_or(4000);
     let max_tokens = req.max_tokens.unwrap_or(4096).max(budget_tokens + 1024);
     (max_tokens, budget_tokens)
 }

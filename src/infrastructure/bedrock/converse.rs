@@ -4,15 +4,10 @@ use aws_sdk_bedrockruntime::types::{
     ContentBlock as BContentBlock, ConversationRole, InferenceConfiguration,
     Message as BedrockMessage, SystemContentBlock,
 };
-use aws_sdk_bedrockruntime::Client as RuntimeClient;
-use std::time::Duration;
 
 use crate::domain::chat::{map_openai_params, ChatRequest, Content};
-use crate::domain::logging::ClickHouseLogger;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Bedrock converse API payload
+/// Extract text from content
 pub struct ConversePayload {
     pub system: Option<Vec<SystemContentBlock>>,
     pub messages: Vec<BedrockMessage>,
@@ -90,21 +85,10 @@ pub fn build_converse_payload(req: &ChatRequest) -> ConversePayload {
 pub fn extract_text_from_content(content: &Content) -> String {
     match content {
         Content::Text(s) => s.clone(),
-        Content::Blocks(blocks) => {
-            blocks.iter().filter_map(|b| b.text.clone()).collect::<Vec<_>>().join("\n")
-        }
+        Content::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| b.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
-}
-
-/// Spawn logging task
-pub fn spawn_log(
-    logger: std::sync::Arc<ClickHouseLogger>,
-    email: String,
-    model: String,
-    p: u32,
-    c: u32,
-) {
-    tokio::spawn(async move {
-        let _ = logger.log_usage(&email, &model, p, c);
-    });
 }

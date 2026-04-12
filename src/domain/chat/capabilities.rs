@@ -11,6 +11,16 @@ pub enum Vendor {
     Cloudflare,
 }
 
+/// Base parameters supported by models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseParams {
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub stop_sequences: Option<String>,
+}
+
+#[cfg(test)]
 impl Vendor {
     pub fn from_model_id(model_id: &str) -> Option<Vendor> {
         let model_lower = model_id.to_lowercase();
@@ -29,15 +39,6 @@ impl Vendor {
             None
         }
     }
-}
-
-/// Base parameters supported by models
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BaseParams {
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub stop_sequences: Option<String>,
 }
 
 /// Model-specific parameters mapped from OpenAI to provider format
@@ -80,6 +81,7 @@ pub struct ModelCapabilities {
 }
 
 impl ModelCapabilities {
+    #[cfg(test)]
     pub fn matches(&self, model_id: &str) -> bool {
         model_id.to_lowercase().contains(self.model_id_pattern)
     }
@@ -468,7 +470,10 @@ mod tests {
         let caps = get_model_capabilities("anthropic.claude-opus-4-5-20261111-v1:0").unwrap();
         assert!(caps.supports_thinking);
         assert!(caps.thinking_config.is_some());
-        assert_eq!(caps.thinking_config.as_ref().unwrap().budget_tokens, Some(4000));
+        assert_eq!(
+            caps.thinking_config.as_ref().unwrap().budget_tokens,
+            Some(4000)
+        );
 
         // Haiku 4.5 supports thinking
         let caps = get_model_capabilities("anthropic.claude-haiku-4-5-20261111-v1:0").unwrap();
@@ -620,8 +625,14 @@ mod tests {
 
     #[test]
     fn test_vendor_enum() {
-        assert_eq!(Vendor::from_model_id("@cf/meta/llama-3.1-8b-instruct"), Some(Vendor::Cloudflare));
-        assert_eq!(Vendor::from_model_id("anthropic.claude-3-5-sonnet-20240620-v1:0"), Some(Vendor::AwsBedrock));
+        assert_eq!(
+            Vendor::from_model_id("@cf/meta/llama-3.1-8b-instruct"),
+            Some(Vendor::Cloudflare)
+        );
+        assert_eq!(
+            Vendor::from_model_id("anthropic.claude-3-5-sonnet-20240620-v1:0"),
+            Some(Vendor::AwsBedrock)
+        );
         assert_eq!(Vendor::from_model_id("unknown.model"), None);
     }
 
@@ -640,7 +651,13 @@ mod tests {
     fn test_map_openai_params_defaults() {
         let (base, additional) = map_openai_params(
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
-            None, None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
 
         // Should use model defaults
@@ -656,8 +673,11 @@ mod tests {
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
             Some(0.5),  // temperature
             Some(0.8),  // top_p
-            Some(2000),  // max_tokens
-            None, None, None, None,
+            Some(2000), // max_tokens
+            None,
+            None,
+            None,
+            None,
         );
 
         // Should use provided values, not defaults
@@ -670,7 +690,12 @@ mod tests {
     fn test_map_openai_params_cohere_top_k() {
         let (_, additional) = map_openai_params(
             "cohere.command-r-v1:0",
-            None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             Some(100), // top_k
         );
 
@@ -683,9 +708,13 @@ mod tests {
     fn test_map_openai_params_cohere_frequency_penalty() {
         let (_, additional) = map_openai_params(
             "cohere.command-r-v1:0",
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             Some(0.5), // frequency_penalty
-            None, None,
+            None,
+            None,
         );
 
         assert!(additional.is_some());
@@ -697,9 +726,13 @@ mod tests {
     fn test_map_openai_params_ai21_frequency_penalty() {
         let (_, additional) = map_openai_params(
             "ai21.j2-mid-v1",
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             Some(0.5), // frequency_penalty
-            None, None,
+            None,
+            None,
         );
 
         assert!(additional.is_some());
@@ -712,9 +745,13 @@ mod tests {
     fn test_map_openai_params_stop_sequences() {
         let (base, _) = map_openai_params(
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
-            None, None, None,
+            None,
+            None,
+            None,
             Some("END".to_string()), // stop_sequences
-            None, None, None,
+            None,
+            None,
+            None,
         );
 
         assert_eq!(base.stop_sequences, Some("END".to_string()));
@@ -725,7 +762,12 @@ mod tests {
         let (base, additional) = map_openai_params(
             "unknown.model-v1:0",
             Some(0.5),
-            None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
 
         // Should use provided values but no additional params

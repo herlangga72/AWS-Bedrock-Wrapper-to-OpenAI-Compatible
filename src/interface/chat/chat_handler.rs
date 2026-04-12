@@ -1,15 +1,15 @@
 //! Standard chat handler using Converse API
 
-use crate::domain::chat::{get_model_capabilities, ChatRequest, Content};
+use crate::domain::chat::ChatRequest;
 use crate::domain::logging::ClickHouseLogger;
 use crate::infrastructure::bedrock::converse::build_converse_payload;
 use crate::infrastructure::cloudflare::CloudflareClient;
 use crate::shared::app_state::AppState;
+use crate::shared::logging::spawn_log;
 
 use aws_sdk_bedrockruntime::{
     types::{
-        ContentBlock, ContentBlockDelta, ConverseOutput as OutputEnum,
-        ConverseStreamOutput as Out,
+        ContentBlock, ContentBlockDelta, ConverseOutput as OutputEnum, ConverseStreamOutput as Out,
     },
     Client as RuntimeClient,
 };
@@ -155,21 +155,35 @@ pub async fn chat_handler(
     if is_cloudflare {
         if let Some(cf_client) = cloudflare_client {
             if is_stream {
-                let s = stream_cloudflare(cf_client, model_id, model_name, req, logger, user_email, message_id);
+                let s = stream_cloudflare(
+                    cf_client, model_id, model_name, req, logger, user_email, message_id,
+                );
                 return Sse::new(s).keep_alive(KeepAlive::default()).into_response();
             } else {
-                return non_stream_cloudflare(cf_client, model_id, model_name, req, logger, user_email, message_id).await;
+                return non_stream_cloudflare(
+                    cf_client, model_id, model_name, req, logger, user_email, message_id,
+                )
+                .await;
             }
         } else {
-            return (StatusCode::SERVICE_UNAVAILABLE, "Cloudflare client not configured").into_response();
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Cloudflare client not configured",
+            )
+                .into_response();
         }
     }
 
     if is_stream {
-        let s = stream_converse(client, model_id, model_name, req, logger, user_email, message_id);
+        let s = stream_converse(
+            client, model_id, model_name, req, logger, user_email, message_id,
+        );
         Sse::new(s).keep_alive(KeepAlive::default()).into_response()
     } else {
-        non_stream(client, model_id, model_name, req, logger, user_email, message_id).await
+        non_stream(
+            client, model_id, model_name, req, logger, user_email, message_id,
+        )
+        .await
     }
 }
 
@@ -403,19 +417,13 @@ async fn non_stream(
     }
 }
 
-fn spawn_log(logger: Arc<ClickHouseLogger>, email: String, model: String, p: u32, c: u32) {
-    tokio::spawn(async move {
-        let _ = logger.log_usage(&email, &model, p, c);
-    });
-}
-
 // =============================================================================
 // Cloudflare Workers AI handlers
 // =============================================================================
 
 fn stream_cloudflare(
     client: CloudflareClient,
-    model_id: String,
+    _model_id: String,
     model_name: String,
     req: ChatRequest,
     logger: Arc<ClickHouseLogger>,
@@ -501,8 +509,16 @@ async fn non_stream_cloudflare(
     };
 
     let openai_resp = cf_resp.to_openai_response(&model_name, &message_id);
-    let p = openai_resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
-    let c = openai_resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
+    let p = openai_resp
+        .usage
+        .as_ref()
+        .map(|u| u.prompt_tokens)
+        .unwrap_or(0);
+    let c = openai_resp
+        .usage
+        .as_ref()
+        .map(|u| u.completion_tokens)
+        .unwrap_or(0);
 
     let total_duration_ms = start_time.elapsed().as_millis() as u64;
     let tps: f64 = if total_duration_ms > 0 {
@@ -523,7 +539,11 @@ async fn non_stream_cloudflare(
             index: 0,
             message: FullMessage {
                 role: "assistant",
-                content: &openai_resp.choices.first().map(|c| c.message.content.as_str()).unwrap_or(""),
+                content: &openai_resp
+                    .choices
+                    .first()
+                    .map(|c| c.message.content.as_str())
+                    .unwrap_or(""),
             },
             finish_reason: "stop",
         }],
@@ -588,10 +608,7 @@ mod tests {
             normalize_model_name("anthropic.claude-3-5-sonnet-v1:0"),
             "anthropic.claude-3-5-sonnet-v1:0"
         );
-        assert_eq!(
-            normalize_model_name("deepseek.r1-v1:0"),
-            "deepseek.r1-v1:0"
-        );
+        assert_eq!(normalize_model_name("deepseek.r1-v1:0"), "deepseek.r1-v1:0");
     }
 
     #[test]

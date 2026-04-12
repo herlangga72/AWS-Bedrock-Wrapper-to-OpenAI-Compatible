@@ -53,11 +53,13 @@ async fn main() {
             std::env::var("CLOUDFLARE_ACCOUNT_ID"),
             std::env::var("CLOUDFLARE_API_TOKEN"),
         ) {
-            Some(CloudflareClient::builder()
-                .account_id(account_id)
-                .api_token(api_token)
-                .build()
-                .expect("Cloudflare client should build"))
+            Some(
+                CloudflareClient::builder()
+                    .account_id(account_id)
+                    .api_token(api_token)
+                    .build()
+                    .expect("Cloudflare client should build"),
+            )
         } else {
             None
         },
@@ -65,12 +67,23 @@ async fn main() {
 
     // Populate models cache
     let monitor_state = state.clone();
-    tokio::spawn(infrastructure::cache::file_cache::run_cache_monitor(monitor_state));
+    tokio::spawn(infrastructure::cache::file_cache::run_cache_monitor(
+        monitor_state,
+    ));
 
     let app = Router::new()
-        .route("/v1/chat/completions", post(interface::chat::chat_with_thinking_handler))
-        .route("/v1/models", get(interface::models::models_handler::list_models_handler))
-        .route("/v1/embeddings", post(interface::embedding::embedding_handler::handle_embeddings))
+        .route(
+            "/v1/chat/completions",
+            post(interface::chat::chat_with_thinking_handler),
+        )
+        .route(
+            "/v1/models",
+            get(interface::models::models_handler::list_models_handler),
+        )
+        .route(
+            "/v1/embeddings",
+            post(interface::embedding::embedding_handler::handle_embeddings),
+        )
         .with_state(state);
 
     let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());

@@ -54,7 +54,9 @@ impl CloudflareClientBuilder {
     pub fn build(self) -> Result<CloudflareClient, String> {
         let account_id = self.account_id.ok_or("account_id is required")?;
         let api_token = self.api_token.ok_or("api_token is required")?;
-        let base_url = self.base_url.unwrap_or_else(|| DEFAULT_CF_BASE_URL.to_string());
+        let base_url = self
+            .base_url
+            .unwrap_or_else(|| DEFAULT_CF_BASE_URL.to_string());
 
         Ok(CloudflareClient {
             client: Client::builder()
@@ -74,7 +76,8 @@ impl CloudflareClient {
         CloudflareClientBuilder::new()
     }
 
-    /// Check if a model ID is a Cloudflare model
+    /// Build the full endpoint URL for a model
+    #[allow(dead_code)]
     pub fn is_cloudflare_model(model_id: &str) -> bool {
         model_id.starts_with("@cf/")
     }
@@ -123,7 +126,7 @@ impl CloudflareClient {
     ) -> Result<impl Stream<Item = Result<String, String>>, String> {
         let url = self.endpoint_url(&req.model);
 
-        let cf_req = CloudflareRequest {
+        let _cf_req = CloudflareRequest {
             messages: req.messages.into_iter().map(Into::into).collect(),
             max_tokens: req.max_tokens.unwrap_or(256),
             stream: true,
@@ -144,9 +147,13 @@ impl CloudflareClient {
             return Err(format!("Cloudflare API error: {}", status));
         }
 
-        let stream = resp.bytes_stream().map(|chunk: Result<bytes::Bytes, reqwest::Error>| {
-            chunk.map(|b| String::from_utf8_lossy(&b).to_string()).map_err(|e| e.to_string())
-        });
+        let stream = resp
+            .bytes_stream()
+            .map(|chunk: Result<bytes::Bytes, reqwest::Error>| {
+                chunk
+                    .map(|b| String::from_utf8_lossy(&b).to_string())
+                    .map_err(|e| e.to_string())
+            });
         Ok(stream)
     }
 }
@@ -189,6 +196,7 @@ impl From<Message> for CfMessage {
 
 #[derive(Deserialize, Debug)]
 pub struct CloudflareResponse {
+    #[allow(dead_code)]
     pub id: Option<String>,
     pub result: Option<CfResult>,
 }
@@ -201,6 +209,7 @@ pub struct CfResult {
 
 #[derive(Deserialize, Debug)]
 pub struct CfResponseMessage {
+    #[allow(dead_code)]
     pub role: String,
     pub content: String,
 }
@@ -374,24 +383,36 @@ mod tests {
     #[test]
     fn test_is_cloudflare_model_edge_cases() {
         // Valid Cloudflare models
-        assert!(CloudflareClient::is_cloudflare_model("@cf/meta/llama-3.1-8b-instruct"));
-        assert!(CloudflareClient::is_cloudflare_model("@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"));
-        assert!(CloudflareClient::is_cloudflare_model("@cf/google/gemma-2-2b-it"));
-        assert!(CloudflareClient::is_cloudflare_model("@cf/mistral/mistral-7b-instruct"));
+        assert!(CloudflareClient::is_cloudflare_model(
+            "@cf/meta/llama-3.1-8b-instruct"
+        ));
+        assert!(CloudflareClient::is_cloudflare_model(
+            "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"
+        ));
+        assert!(CloudflareClient::is_cloudflare_model(
+            "@cf/google/gemma-2-2b-it"
+        ));
+        assert!(CloudflareClient::is_cloudflare_model(
+            "@cf/mistral/mistral-7b-instruct"
+        ));
 
         // Not Cloudflare models (must start with @cf/)
         assert!(!CloudflareClient::is_cloudflare_model("@cf")); // just prefix
         assert!(!CloudflareClient::is_cloudflare_model("cf/llama")); // missing @
         assert!(!CloudflareClient::is_cloudflare_model("@cfx/meta/llama")); // extra char
-        assert!(!CloudflareClient::is_cloudflare_model("anthropic.claude-v1"));
-        assert!(!CloudflareClient::is_cloudflare_model("bedrock/anthropic.claude-v1")); // bedrock, not cloudflare
+        assert!(!CloudflareClient::is_cloudflare_model(
+            "anthropic.claude-v1"
+        ));
+        assert!(!CloudflareClient::is_cloudflare_model(
+            "bedrock/anthropic.claude-v1"
+        )); // bedrock, not cloudflare
         assert!(!CloudflareClient::is_cloudflare_model(""));
     }
 
     #[test]
     fn test_endpoint_url_building() {
         // Test via the builder and inspection
-        let client = CloudflareClient::builder()
+        let _client = CloudflareClient::builder()
             .account_id("test-account-id")
             .api_token("test-token")
             .base_url("https://api.cloudflare.com/client/v4/accounts".to_string())
@@ -406,16 +427,12 @@ mod tests {
     #[test]
     fn test_cloudflare_client_builder_validation() {
         // Missing account_id
-        let result = CloudflareClient::builder()
-            .api_token("token")
-            .build();
+        let result = CloudflareClient::builder().api_token("token").build();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("account_id"));
 
         // Missing api_token
-        let result = CloudflareClient::builder()
-            .account_id("account")
-            .build();
+        let result = CloudflareClient::builder().account_id("account").build();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("api_token"));
 

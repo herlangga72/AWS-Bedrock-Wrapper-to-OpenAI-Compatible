@@ -7,6 +7,6 @@
 //! - `cache` - File-based caching
 
 pub mod bedrock;
+pub mod cache;
 pub mod cloudflare;
 pub mod persistence;
-pub mod cache;

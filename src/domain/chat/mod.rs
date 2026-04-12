@@ -1,9 +1,7 @@
 //! Chat domain - Chat completions, thinking, and reasoning
 
-pub mod types;
 pub mod capabilities;
-pub mod errors;
+pub mod types;
 
-pub use types::*;
 pub use capabilities::*;
-pub use errors::*;
+pub use types::*;
