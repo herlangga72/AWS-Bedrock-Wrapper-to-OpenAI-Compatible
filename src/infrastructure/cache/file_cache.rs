@@ -23,6 +23,30 @@ pub async fn refresh_models_cache(
     let summaries = resp.model_summaries.unwrap_or_default();
     let data: Vec<ModelData> = summaries
         .into_iter()
+        .filter(|m| {
+            // Filter out models that require PROVISIONED throughput or INFERENCE_PROFILE
+            // Only include models that support ON_DEMAND inference
+            let supported_types = m.inference_types_supported.as_ref();
+            let is_on_demand = supported_types.map_or(false, |types| {
+                types.iter().any(|t| {
+                    let s = t.as_str();
+                    s == "ON_DEMAND" || s == "ON_DEMAND_USAGE"
+                })
+            });
+
+            // Filter out embedding models (they use /v1/embeddings endpoint)
+            let output_modalities = m.output_modalities.as_ref();
+            let is_not_embedding = output_modalities.map_or(true, |mods| {
+                !mods.iter().any(|m| m.as_str() == "EMBEDDING")
+            });
+
+            // Filter out image generation models (not chat models)
+            let is_not_image = output_modalities.map_or(true, |mods| {
+                !mods.iter().any(|m| m.as_str() == "IMAGE")
+            });
+
+            is_on_demand && is_not_embedding && is_not_image
+        })
         .map(|m| ModelData {
             id: m.model_id,
             object: "model",

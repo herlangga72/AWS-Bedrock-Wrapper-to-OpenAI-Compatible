@@ -260,12 +260,17 @@ fn non_stream_as_stream(
     let (max_tokens, budget_tokens) = parse_thinking_params(&req);
 
     async_stream::stream! {
+        // Open Web UI format: thinking block start
         yield Ok(Event::default().data(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#));
 
         let body = build_thinking_request(&req, max_tokens, budget_tokens);
         let resp = match invoke_thinking_model(&client, &model_id, &body).await {
             Ok(r) => r,
-            Err(_) => { yield Ok(Event::default().data(r#"{"error":"Thinking stream failed"}"#)); return; }
+            Err(e) => {
+                tracing::error!("Thinking invoke failed: {e}");
+                yield Ok(Event::default().data(r#"{"error":"Thinking stream failed"}"#));
+                return;
+            }
         };
 
         let mut thinking_text = String::new();
@@ -273,35 +278,64 @@ fn non_stream_as_stream(
 
         for block in &resp.content {
             match block.r#type.as_str() {
-                "thinking" => if let Some(t) = &block.thinking { thinking_text.push_str(t); },
-                "text" => if let Some(t) = &block.text { response_text.push_str(t); },
+                "thinking" => {
+                    if let Some(t) = &block.thinking {
+                        thinking_text.push_str(t);
+                    }
+                }
+                "text" => {
+                    if let Some(t) = &block.text {
+                        response_text.push_str(t);
+                    }
+                }
                 _ => {}
             }
         }
 
+        // Send thinking content if any
         if !thinking_text.is_empty() {
             yield Ok(Event::default().data(serde_json::json!({
                 "type": "content_block_delta",
                 "index": 0,
-                "delta": { "type": "thinking_delta", "thinking": thinking_text }
+                "delta": {
+                    "type": "thinking_delta",
+                    "thinking": thinking_text
+                }
             }).to_string()));
         }
 
+        // End thinking block
         yield Ok(Event::default().data(r#"{"type":"content_block_stop","index":0}"#));
+
+        // Start text block
         yield Ok(Event::default().data(r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#));
 
+        // Send text content if any
         if !response_text.is_empty() {
             yield Ok(Event::default().data(serde_json::json!({
                 "type": "content_block_delta",
                 "index": 1,
-                "delta": { "type": "text_delta", "text": response_text }
+                "delta": {
+                    "type": "text_delta",
+                    "text": response_text
+                }
             }).to_string()));
         }
 
+        // End text block
         yield Ok(Event::default().data(r#"{"type":"content_block_stop","index":1}"#));
+
+        // Final message delta with usage
         yield Ok(Event::default().data(serde_json::json!({
             "type": "message_delta",
-            "usage": { "output_tokens": resp.usage.output_tokens }
+            "delta": {
+                "stop_reason": "end_turn"
+            },
+            "usage": {
+                "output_tokens": resp.usage.output_tokens,
+                "completion_tokens": resp.usage.output_tokens,
+                "total_tokens": resp.usage.total_tokens
+            }
         }).to_string()));
 
         spawn_log(logger, user_email, model_name, resp.usage.input_tokens, resp.usage.output_tokens);

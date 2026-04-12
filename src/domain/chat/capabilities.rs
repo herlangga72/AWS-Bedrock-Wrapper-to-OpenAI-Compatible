@@ -122,11 +122,12 @@ pub fn get_model_capabilities(model_id: &str) -> Option<ModelCapabilities> {
 }
 
 fn claude_capabilities(model_id: &str) -> ModelCapabilities {
-    let supports_thinking = model_id.contains("claude-opus-4-5")
-        || model_id.contains("claude-sonnet-4-5")
-        || model_id.contains("claude-haiku-4-5")
-        || model_id.contains("claude-3-7-sonnet")
-        || model_id.contains("claude-3-5-sonnet");
+    // Extended thinking supported only on Claude 3.5+ and 4.x models
+    let supports_thinking = model_id.contains("claude-opus-4-")
+        || model_id.contains("claude-sonnet-4-")
+        || model_id.contains("claude-haiku-4-")
+        || model_id.contains("claude-3-5-sonnet")
+        || model_id.contains("claude-3-7-sonnet");
 
     ModelCapabilities {
         provider: "anthropic",
@@ -485,28 +486,49 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_older_models_no_thinking() {
-        // Older Claude 3 models don't support extended thinking
-        let caps = get_model_capabilities("anthropic.claude-3-opus-20240229-v1:0").unwrap();
-        assert!(!caps.supports_thinking);
-        assert!(caps.thinking_config.is_none());
+    fn test_claude_4_series_thinking() {
+        // Opus 4.6 supports thinking
+        let caps = get_model_capabilities("anthropic.claude-opus-4-6-v1:0").unwrap();
+        assert!(caps.supports_thinking);
+        assert!(caps.thinking_config.is_some());
+        assert_eq!(
+            caps.thinking_config.as_ref().unwrap().budget_tokens,
+            Some(4000)
+        );
 
-        let caps = get_model_capabilities("anthropic.claude-3-sonnet-20240229-v1:0").unwrap();
-        assert!(!caps.supports_thinking);
+        // Sonnet 4.6 supports thinking
+        let caps = get_model_capabilities("anthropic.claude-sonnet-4-6").unwrap();
+        assert!(caps.supports_thinking);
+
+        // Haiku 4.6 supports thinking
+        let caps = get_model_capabilities("anthropic.claude-haiku-4-5-20251001-v1:0").unwrap();
+        assert!(caps.supports_thinking);
+
+        // 4.0 variants (without minor version) should also work if they match pattern
+        let caps = get_model_capabilities("anthropic.claude-opus-4-20250514-v1:0").unwrap();
+        assert!(caps.supports_thinking);
     }
 
     #[test]
-    fn test_deepseek_model_matching() {
+    fn test_deepseek_reasoning_models() {
+        // R1 models support reasoning
         let caps = get_model_capabilities("deepseek.r1-v1:0").unwrap();
         assert!(caps.supports_reasoning);
         assert!(!caps.supports_thinking);
         assert!(caps.uses_converse_api);
-    }
 
-    #[test]
-    fn test_deepseek_non_r1_no_reasoning() {
+        // R1 distill variants
+        let caps = get_model_capabilities("deepseek.r1-distill-qwen-32b-v1:0").unwrap();
+        assert!(caps.supports_reasoning);
+
+        // Chat models don't support reasoning
         let caps = get_model_capabilities("deepseek.chat-v2-20241111-v1:0").unwrap();
         assert!(!caps.supports_reasoning);
+
+        // V3 doesn't support reasoning (not R1 based)
+        let caps = get_model_capabilities("deepseek.v3.2").unwrap();
+        assert!(!caps.supports_reasoning);
+        assert!(caps.uses_converse_api);
     }
 
     #[test]

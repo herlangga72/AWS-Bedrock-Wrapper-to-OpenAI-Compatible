@@ -5,6 +5,7 @@ use crate::domain::embedding::{
     OpenAiEmbeddingResponse, OpenAiUsage,
 };
 use crate::shared::app_state::AppState;
+use crate::shared::errors::error_response;
 
 use aws_sdk_bedrockruntime::primitives::Blob;
 use axum::{extract::State, http::StatusCode, Json, response::{IntoResponse, Response}};
@@ -12,51 +13,34 @@ use axum_extra::{
     headers::{authorization::Bearer, Authorization},
     TypedHeader,
 };
-use serde::Serialize;
 
 const NOVA_MODEL_ID: &str = "amazon.nova-2-multimodal-embeddings-v1:0";
-
-/// Error response structure
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-    code: u16,
-}
-
-fn make_error_response(status: StatusCode, error: &str) -> Response {
-    let err = ErrorResponse {
-        error: error.to_string(),
-        code: status.as_u16(),
-    };
-    let json = serde_json::to_string(&err).unwrap_or_else(|_| r#"{"error":"Internal error"}"#.to_string());
-    (status, [("content-type", "application/json")], json).into_response()
-}
 
 pub async fn handle_embeddings(
     State(state): State<AppState>,
     auth: Option<TypedHeader<Authorization<Bearer>>>,
     Json(payload): Json<OpenAiEmbeddingRequest>,
 ) -> Response {
-    // Validate authentication
+    // Authenticate
     let _user_email = match auth {
         Some(TypedHeader(Authorization(bearer))) => {
             match state.auth.authenticate(bearer.token()) {
                 Ok(email) => email,
-                Err(_) => return make_error_response(StatusCode::UNAUTHORIZED, "Invalid API Key"),
+                Err(_) => return error_response(StatusCode::UNAUTHORIZED, "Invalid API Key"),
             }
         },
-        None => return make_error_response(StatusCode::UNAUTHORIZED, "Missing API Key"),
+        None => return error_response(StatusCode::UNAUTHORIZED, "Missing API Key"),
     };
 
     // Validate input
     if payload.input.is_empty() {
         tracing::error!("Empty input array received");
-        return make_error_response(StatusCode::BAD_REQUEST, "input array cannot be empty");
+        return error_response(StatusCode::BAD_REQUEST, "input array cannot be empty");
     }
 
     let input_text = match payload.input.first() {
         Some(text) => text,
-        None => return make_error_response(StatusCode::BAD_REQUEST, "input array cannot be empty"),
+        None => return error_response(StatusCode::BAD_REQUEST, "input array cannot be empty"),
     };
 
     let nova_payload = NovaRequest::new(input_text);
@@ -65,7 +49,7 @@ pub async fn handle_embeddings(
         Ok(body) => body,
         Err(e) => {
             tracing::error!("Serialization error: {e}");
-            return make_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize request");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize request");
         }
     };
 
@@ -82,7 +66,7 @@ pub async fn handle_embeddings(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("AWS Bedrock Dispatch Error: {e:?}");
-            return make_error_response(StatusCode::BAD_GATEWAY, "Bedrock API error");
+            return error_response(StatusCode::BAD_GATEWAY, "Bedrock API error");
         }
     };
 
@@ -90,7 +74,7 @@ pub async fn handle_embeddings(
         Ok(o) => o,
         Err(e) => {
             tracing::error!("Failed to parse Nova response: {e}");
-            return make_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse response");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse response");
         }
     };
 
@@ -98,7 +82,7 @@ pub async fn handle_embeddings(
         Some(e) => e,
         None => {
             tracing::error!("Nova returned empty embedding list");
-            return make_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Empty embedding response");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Empty embedding response");
         }
     };
 
@@ -118,6 +102,6 @@ pub async fn handle_embeddings(
 
     match serde_json::to_string(&response) {
         Ok(json) => (StatusCode::OK, [("content-type", "application/json")], json).into_response(),
-        Err(_) => make_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize response"),
+        Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize response"),
     }
 }

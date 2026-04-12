@@ -58,9 +58,11 @@ impl CloudflareClientBuilder {
             .base_url
             .unwrap_or_else(|| DEFAULT_CF_BASE_URL.to_string());
 
+use crate::shared::constants::REQUEST_TIMEOUT_CLOUDFLARE;
+
         Ok(CloudflareClient {
             client: Client::builder()
-                .timeout(Duration::from_secs(120))
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT_CLOUDFLARE))
                 .build()
                 .map_err(|e| e.to_string())?,
             account_id,

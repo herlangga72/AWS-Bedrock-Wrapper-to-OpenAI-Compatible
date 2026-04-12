@@ -5,6 +5,8 @@ use crate::domain::logging::ClickHouseLogger;
 use crate::infrastructure::bedrock::converse::build_converse_payload;
 use crate::infrastructure::cloudflare::CloudflareClient;
 use crate::shared::app_state::AppState;
+use crate::shared::constants::*;
+use crate::shared::errors::{error_response, sse_error};
 use crate::shared::logging::spawn_log;
 
 use aws_sdk_bedrockruntime::{
@@ -36,40 +38,27 @@ use std::{
 use tokio::time::timeout;
 use uuid::Uuid;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-const MIN_TEMPERATURE: f32 = 0.0;
-const MAX_TEMPERATURE: f32 = 2.0;
-
-/// Error response structure for consistent API errors
-#[derive(Serialize)]
-struct ErrorResponse<'a> {
-    error: &'a str,
-    code: u16,
-}
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT_CHAT);
 
 /// Validate request parameters early
 fn validate_chat_request(req: &ChatRequest) -> Result<(), String> {
-    // Validate model is not empty
     if req.model.is_empty() {
         return Err("model field cannot be empty".to_string());
     }
 
-    // Validate messages array is not empty
     if req.messages.is_empty() {
         return Err("messages array cannot be empty".to_string());
     }
 
-    // Validate temperature range if provided
     if let Some(temp) = req.temperature {
-        if temp < MIN_TEMPERATURE || temp > MAX_TEMPERATURE {
+        if temp < crate::shared::constants::MIN_TEMPERATURE || temp > crate::shared::constants::MAX_TEMPERATURE {
             return Err(format!(
                 "temperature must be between {:.1} and {:.1}, got {:.1}",
-                MIN_TEMPERATURE, MAX_TEMPERATURE, temp
+                crate::shared::constants::MIN_TEMPERATURE, crate::shared::constants::MAX_TEMPERATURE, temp
             ));
         }
     }
 
-    // Validate each message has valid role and content
     for (i, msg) in req.messages.iter().enumerate() {
         match msg.role.as_str() {
             "user" | "assistant" | "system" => {}
@@ -90,7 +79,7 @@ fn normalize_model_name(model: &str) -> String {
     if model.starts_with("@cf/") {
         model.replacen("@cf/", "cloudflare/", 1)
     } else {
-        model.replace("bedrock/", "aws/bedrock/")
+        model.replacen("bedrock/", "aws/bedrock/", 1)
     }
 }
 
@@ -164,34 +153,18 @@ pub async fn chat_handler(
 ) -> Response {
     // Validate request parameters early
     if let Err(e) = validate_chat_request(&req) {
-        let err_resp = ErrorResponse {
-            error: &e,
-            code: StatusCode::BAD_REQUEST.as_u16(),
-        };
-        let json = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error":"Invalid request"}"#.to_string());
-        return (StatusCode::BAD_REQUEST, [("content-type", "application/json")], json).into_response();
+        return error_response(StatusCode::BAD_REQUEST, &e);
     }
 
+    // Authenticate
     let temp_user_email = match auth {
-        Some(TypedHeader(Authorization(bearer))) => match state.auth.authenticate(bearer.token()) {
-            Ok(email) => email,
-            Err(_) => {
-                let err_resp = ErrorResponse {
-                    error: "Invalid API Key",
-                    code: StatusCode::UNAUTHORIZED.as_u16(),
-                };
-                let json = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error":"Unauthorized"}"#.to_string());
-                return (StatusCode::UNAUTHORIZED, [("content-type", "application/json")], json).into_response();
+        Some(TypedHeader(Authorization(bearer))) => {
+            match state.auth.authenticate(bearer.token()) {
+                Ok(email) => email,
+                Err(_) => return error_response(StatusCode::UNAUTHORIZED, "Invalid API Key"),
             }
-        },
-        None => {
-            let err_resp = ErrorResponse {
-                error: "Missing API Key",
-                code: StatusCode::UNAUTHORIZED.as_u16(),
-            };
-            let json = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error":"Unauthorized"}"#.to_string());
-            return (StatusCode::UNAUTHORIZED, [("content-type", "application/json")], json).into_response();
         }
+        None => return error_response(StatusCode::UNAUTHORIZED, "Missing API Key"),
     };
 
     let user_email = if temp_user_email == "chat" {
@@ -287,7 +260,7 @@ fn stream_converse(
 
         let mut resp = match timeout(REQUEST_TIMEOUT, sdk_call).await {
             Ok(Ok(r)) => r,
-            _ => { yield Ok(Event::default().data(r#"{"error":"Stream failed"}"#)); return; }
+            _ => { yield sse_error("Stream failed"); return; }
         };
 
         let mut metrics = (0u32, 0u32);
@@ -349,7 +322,9 @@ fn stream_converse(
                         yield Ok(Event::default().data(j));
                     }
                 }
-                _ => {}
+                _ => {
+                    tracing::debug!("Unknown stream event type: {:?}", event);
+                }
             }
         }
 
@@ -407,7 +382,11 @@ async fn non_stream(
 
     let resp = match timeout(REQUEST_TIMEOUT, sdk_call).await {
         Ok(Ok(output)) => output,
-        _ => return (StatusCode::BAD_GATEWAY, "Bedrock Error").into_response(),
+        Ok(Err(e)) => {
+            tracing::error!("Bedrock converse error: {:?}", e);
+            return (StatusCode::BAD_GATEWAY, format!("Bedrock Error: {}", e)).into_response();
+        }
+        Err(_) => return (StatusCode::BAD_GATEWAY, "Request timeout").into_response(),
     };
 
     let p = resp
@@ -438,18 +417,6 @@ async fn non_stream(
 
     let request_id = message_id;
     let total_duration_ms = start_time.elapsed().as_millis() as u64;
-
-    let (p, c) = (
-        resp.usage
-            .as_ref()
-            .map(|u| u.input_tokens as u32)
-            .unwrap_or(0),
-        resp.usage
-            .as_ref()
-            .map(|u| u.output_tokens as u32)
-            .unwrap_or(0),
-    );
-
     let tps = if total_duration_ms > 0 {
         (c as f64) / (total_duration_ms as f64 / 1000.0)
     } else {
@@ -538,8 +505,8 @@ fn stream_cloudflare(
 
         let total_duration_ms = start_time.elapsed().as_millis() as u64;
         if let Some(ttft) = ttft_ms {
-            let gen_time_sec = (total_duration_ms.saturating_sub(ttft) as f64) / 1000.0;
-            let tps: f64 = if gen_time_sec > 0.0 { 0.0 } else { 0.0f64 };
+            let _gen_time_sec = (total_duration_ms.saturating_sub(ttft) as f64) / 1000.0;
+            let tps: f64 = 0.0; // Cloudflare streaming doesn't provide token counts
 
             let usage_chunk = ChatChunk {
                 id: &request_id,
@@ -684,10 +651,10 @@ mod tests {
 
     #[test]
     fn test_normalize_model_name_multiple_bedrock() {
-        // replace() replaces ALL occurrences, not just the first one
+        // replacen() replaces only the first occurrence
         assert_eq!(
             normalize_model_name("bedrock/bedrock/anthropic.claude"),
-            "aws/bedrock/aws/bedrock/anthropic.claude"
+            "aws/bedrock/bedrock/anthropic.claude"
         );
     }
 
@@ -784,5 +751,132 @@ mod tests {
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"delta\":{\"content\":\"Hello\"}"));
         assert!(!json.contains("usage")); // None, so skipped
+    }
+
+    #[test]
+    fn test_validate_chat_request_empty_model() {
+        let req = ChatRequest {
+            model: "".to_string(),
+            messages: vec![crate::domain::chat::Message {
+                role: "user".to_string(),
+                content: crate::domain::chat::Content::Text("hi".to_string()),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            stop_sequences: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            logit_bias: None,
+            user: None,
+            top_k: None,
+            thinking: None,
+        };
+        let result = validate_chat_request(&req);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "model field cannot be empty");
+    }
+
+    #[test]
+    fn test_validate_chat_request_empty_messages() {
+        let req = ChatRequest {
+            model: "test-model".to_string(),
+            messages: vec![],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            stop_sequences: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            logit_bias: None,
+            user: None,
+            top_k: None,
+            thinking: None,
+        };
+        let result = validate_chat_request(&req);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "messages array cannot be empty");
+    }
+
+    #[test]
+    fn test_validate_chat_request_invalid_role() {
+        let req = ChatRequest {
+            model: "test-model".to_string(),
+            messages: vec![crate::domain::chat::Message {
+                role: "admin".to_string(),
+                content: crate::domain::chat::Content::Text("hi".to_string()),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            stop_sequences: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            logit_bias: None,
+            user: None,
+            top_k: None,
+            thinking: None,
+        };
+        let result = validate_chat_request(&req);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be 'user', 'assistant', or 'system'"));
+    }
+
+    #[test]
+    fn test_validate_chat_request_temperature_out_of_range() {
+        let req = ChatRequest {
+            model: "test-model".to_string(),
+            messages: vec![crate::domain::chat::Message {
+                role: "user".to_string(),
+                content: crate::domain::chat::Content::Text("hi".to_string()),
+            }],
+            stream: None,
+            temperature: Some(5.0),
+            top_p: None,
+            max_tokens: None,
+            stop_sequences: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            logit_bias: None,
+            user: None,
+            top_k: None,
+            thinking: None,
+        };
+        let result = validate_chat_request(&req);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("temperature must be between"));
+    }
+
+    #[test]
+    fn test_validate_chat_request_valid() {
+        let req = ChatRequest {
+            model: "test-model".to_string(),
+            messages: vec![
+                crate::domain::chat::Message {
+                    role: "system".to_string(),
+                    content: crate::domain::chat::Content::Text("you are helpful".to_string()),
+                },
+                crate::domain::chat::Message {
+                    role: "user".to_string(),
+                    content: crate::domain::chat::Content::Text("hi".to_string()),
+                },
+            ],
+            stream: Some(true),
+            temperature: Some(0.7),
+            top_p: None,
+            max_tokens: Some(100),
+            stop_sequences: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            logit_bias: None,
+            user: None,
+            top_k: None,
+            thinking: None,
+        };
+        let result = validate_chat_request(&req);
+        assert!(result.is_ok());
     }
 }

@@ -28,11 +28,14 @@ use futures_util::Stream;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::sync::Arc;
+use crate::shared::constants::REQUEST_TIMEOUT_THINKING;
+use crate::shared::errors::error_response;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT_THINKING);
 
 // Response builders
 #[derive(Serialize)]

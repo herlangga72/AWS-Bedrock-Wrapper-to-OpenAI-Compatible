@@ -1,5 +1,6 @@
 //! Logging domain types - Usage logging to ClickHouse
 
+use crate::shared::constants::*;
 use clickhouse::{Client, Row};
 use serde::Serialize;
 use std::time::Duration;
@@ -25,13 +26,12 @@ pub struct ClickHouseLogger {
 
 impl ClickHouseLogger {
     pub fn new() -> Self {
-        let url =
-            std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
-        let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+        let url = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| CLICKHOUSE_URL.to_string());
+        let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| CLICKHOUSE_USER.to_string());
         let pass = std::env::var("CLICKHOUSE_PASSWORD").expect("CLICKHOUSE_PASSWORD must be set");
-        let db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "default".to_string());
+        let db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| CLICKHOUSE_DB.to_string());
 
-        let (tx, mut rx) = mpsc::channel::<LogEntry>(4096);
+        let (tx, mut rx) = mpsc::channel::<LogEntry>(CLICKHOUSE_BATCH_SIZE);
 
         let client = Client::default()
             .with_url(url)
@@ -41,15 +41,15 @@ impl ClickHouseLogger {
             .with_compression(clickhouse::Compression::Lz4);
 
         tokio::spawn(async move {
-            let mut batch = Vec::with_capacity(5000);
-            let mut ticker = interval(Duration::from_secs(2));
+            let mut batch = Vec::with_capacity(CLICKHOUSE_BATCH_SIZE);
+            let mut ticker = interval(Duration::from_secs(CLICKHOUSE_FLUSH_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
             loop {
                 tokio::select! {
                     Some(entry) = rx.recv() => {
                         batch.push(entry);
-                        if batch.len() >= 5000 {
+                        if batch.len() >= CLICKHOUSE_BATCH_SIZE {
                             Self::flush(&client, &mut batch).await;
                         }
                     }

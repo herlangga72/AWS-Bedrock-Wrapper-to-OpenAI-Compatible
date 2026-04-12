@@ -4,8 +4,14 @@ use aws_sdk_bedrockruntime::types::{
     ContentBlock as BContentBlock, ConversationRole, InferenceConfiguration,
     Message as BedrockMessage, SystemContentBlock,
 };
+use tracing::warn;
 
 use crate::domain::chat::{map_openai_params, ChatRequest, Content};
+
+/// Normalize model ID by removing "bedrock/" prefix
+pub fn normalize_bedrock_model_id(model: &str) -> String {
+    model.replace("bedrock/", "")
+}
 
 /// Extract text from content
 pub struct ConversePayload {
@@ -32,32 +38,30 @@ pub fn build_converse_payload(req: &ChatRequest) -> ConversePayload {
     );
 
     for m in &req.messages {
-        match m.role.as_str() {
-            "user" => {
-                let text = extract_text_from_content(&m.content);
-                if let Ok(msg) = BedrockMessage::builder()
-                    .role(ConversationRole::User)
-                    .content(BContentBlock::Text(text))
-                    .build()
-                {
-                    bedrock_messages.push(msg);
-                }
-            }
-            "assistant" => {
-                let text = extract_text_from_content(&m.content);
-                if let Ok(msg) = BedrockMessage::builder()
-                    .role(ConversationRole::Assistant)
-                    .content(BContentBlock::Text(text))
-                    .build()
-                {
-                    bedrock_messages.push(msg);
-                }
-            }
+        let role = m.role.as_str();
+        if role != "user" && role != "assistant" && role != "system" {
+            warn!("Skipping message with unrecognized role: {}", role);
+            continue;
+        }
+
+        let text = extract_text_from_content(&m.content);
+        let conversation_role = match role {
+            "user" => ConversationRole::User,
+            "assistant" => ConversationRole::Assistant,
             "system" => {
-                let text = extract_text_from_content(&m.content);
                 system_blocks.push(SystemContentBlock::Text(text));
+                continue;
             }
-            _ => {}
+            _ => continue,
+        };
+
+        match BedrockMessage::builder()
+            .role(conversation_role)
+            .content(BContentBlock::Text(text))
+            .build()
+        {
+            Ok(msg) => bedrock_messages.push(msg),
+            Err(e) => warn!("Failed to build message for role {}: {:?}", role, e),
         }
     }
 
