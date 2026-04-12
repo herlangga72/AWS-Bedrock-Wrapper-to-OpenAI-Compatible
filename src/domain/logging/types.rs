@@ -28,7 +28,7 @@ impl ClickHouseLogger {
     pub fn new() -> Self {
         let url = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| CLICKHOUSE_URL.to_string());
         let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| CLICKHOUSE_USER.to_string());
-        let pass = std::env::var("CLICKHOUSE_PASSWORD").expect("CLICKHOUSE_PASSWORD must be set");
+        let pass = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| CLICKHOUSE_PASSWORD.to_string());
         let db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| CLICKHOUSE_DB.to_string());
 
         let (tx, mut rx) = mpsc::channel::<LogEntry>(CLICKHOUSE_BATCH_SIZE);

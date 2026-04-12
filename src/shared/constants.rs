@@ -19,19 +19,18 @@ pub const NOVA_EMBED_MODEL_ID: &str = "amazon.nova-2-multimodal-embeddings-v1:0"
 /// ClickHouse configuration defaults
 pub const CLICKHOUSE_URL: &str = "http://127.0.0.1:8123";
 pub const CLICKHOUSE_USER: &str = "default";
-pub const CLICKHOUSE_PASSWORD: &str = ""; // Must be set via env var
+pub const CLICKHOUSE_PASSWORD: &str = ""; // Empty default, override via env var
 pub const CLICKHOUSE_DB: &str = "default";
 pub const CLICKHOUSE_BATCH_SIZE: usize = 5000;
 pub const CLICKHOUSE_FLUSH_INTERVAL_SECS: u64 = 2;
 
 /// Token limits per model family (defaults)
-pub const DEFAULT_MAX_TOKENS_LLAMA: u32 = 4096;
-pub const DEFAULT_MAX_TOKENS_CLAUDE: u32 = 8192;
-pub const DEFAULT_MAX_TOKENS_COHERE: u32 = 4096;
+pub const DEFAULT_MAX_TOKENS_LLAMA: u32 = 512;
+pub const DEFAULT_MAX_TOKENS_CLAUDE: u32 = 4096;
+pub const DEFAULT_MAX_TOKENS_COHERE: u32 = 2048;
 pub const DEFAULT_MAX_TOKENS_MISTRAL: u32 = 4096;
-pub const DEFAULT_MAX_TOKENS_DEEPSEEK: u32 = 4096;
-pub const DEFAULT_MAX_TOKENS_TITAN: u32 = 512;
-pub const DEFAULT_MAX_TOKENS_NOVA: u32 = 2048;
-pub const DEFAULT_MAX_TOKENS_JURASSIC: u32 = 2048;
-pub const DEFAULT_MAX_TOKENS_AZURE: u32 = 4096;
+pub const DEFAULT_MAX_TOKENS_DEEPSEEK: u32 = 8192;
+pub const DEFAULT_MAX_TOKENS_TITAN: u32 = 2048;
+pub const DEFAULT_MAX_TOKENS_NOVA: u32 = 4096;
 pub const DEFAULT_MAX_TOKENS_AI21: u32 = 2048;
+pub const DEFAULT_MAX_TOKENS_CLOUDFLARE: u32 = 256;

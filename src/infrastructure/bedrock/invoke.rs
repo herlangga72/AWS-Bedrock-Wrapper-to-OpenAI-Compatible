@@ -36,8 +36,10 @@ struct ThinkingMessage<'a> {
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
 enum ThinkingContent<'a> {
     Text(&'a str),
+    OwnedText(String),
     Blocks(Vec<ThinkingContentBlock<'a>>),
 }
 
@@ -81,46 +83,57 @@ pub struct ResponseUsage {
 // =============================================================================
 
 /// Build thinking request body for Claude models
-pub fn build_thinking_request(
-    req: &ChatRequest,
+/// If caveman_prompt is Some, prepend a system message with the caveman rules
+pub fn build_thinking_request<'a>(
+    req: &'a ChatRequest,
     max_tokens: u32,
     budget_tokens: u32,
-) -> ThinkingRequestBody<'_> {
+    caveman_prompt: Option<&str>,
+) -> ThinkingRequestBody<'a> {
     let thinking_block = Some(ThinkingBlock {
         r#type: "enabled",
         budget_tokens,
     });
 
-    let messages: Vec<ThinkingMessage<'_>> = req
-        .messages
-        .iter()
-        .map(|m| {
-            let role = match m.role.as_str() {
-                "user" => "user",
-                "assistant" => "assistant",
-                _ => "user",
-            };
-            let content = match &m.content {
-                Content::Text(text) => ThinkingContent::Text(text.as_str()),
-                Content::Blocks(blocks) => {
-                    let blocks: Vec<ThinkingContentBlock<'_>> = blocks
-                        .iter()
-                        .map(|b| ThinkingContentBlock {
-                            r#type: if b.thinking.is_some() {
-                                "thinking"
-                            } else {
-                                "text"
-                            },
-                            text: b.text.as_deref(),
-                            thinking: b.thinking.as_deref(),
-                        })
-                        .collect();
-                    ThinkingContent::Blocks(blocks)
-                }
-            };
-            ThinkingMessage { role, content }
-        })
-        .collect();
+    let mut messages: Vec<ThinkingMessage<'_>> = Vec::new();
+
+    // Prepend caveman system message if activated
+    if let Some(prompt) = caveman_prompt {
+        messages.push(ThinkingMessage {
+            role: "user",
+            content: ThinkingContent::OwnedText(prompt.to_string()),
+        });
+    }
+
+    let user_role = "user";
+    let assistant_role = "assistant";
+
+    messages.extend(req.messages.iter().map(|m| {
+        let role = match m.role.as_str() {
+            "user" => user_role,
+            "assistant" => assistant_role,
+            _ => user_role,
+        };
+        let content = match &m.content {
+            Content::Text(text) => ThinkingContent::Text(text.as_str()),
+            Content::Blocks(blocks) => {
+                let blocks: Vec<ThinkingContentBlock<'_>> = blocks
+                    .iter()
+                    .map(|b| ThinkingContentBlock {
+                        r#type: if b.thinking.is_some() {
+                            "thinking"
+                        } else {
+                            "text"
+                        },
+                        text: b.text.as_deref(),
+                        thinking: b.thinking.as_deref(),
+                    })
+                    .collect();
+                ThinkingContent::Blocks(blocks)
+            }
+        };
+        ThinkingMessage { role, content }
+    }));
 
     ThinkingRequestBody {
         anthropic_version: THINKING_VERSION,

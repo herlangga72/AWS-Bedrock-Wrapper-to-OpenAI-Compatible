@@ -1,7 +1,7 @@
 //! Reasoning handler for DeepSeek R1 and similar models on AWS Bedrock
 //! Uses Converse API but processes reasoningContent from responses
 
-use crate::domain::chat::{ChatRequest, Content, ContentBlock};
+use crate::domain::chat::{caveman_system_prompt, detect_caveman_activation, ChatRequest, Content, ContentBlock};
 use crate::domain::logging::ClickHouseLogger;
 use crate::infrastructure::bedrock::converse::build_converse_payload;
 use crate::shared::app_state::AppState;
@@ -29,7 +29,6 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::sync::Arc;
 use crate::shared::constants::REQUEST_TIMEOUT_THINKING;
-use crate::shared::errors::error_response;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::timeout;
@@ -118,6 +117,14 @@ async fn reasoning_handler(
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
 
+    // Detect caveman mode from messages
+    let caveman_active = detect_caveman_activation(&req.messages);
+    let caveman_prompt = if caveman_active {
+        Some(caveman_system_prompt("full"))
+    } else {
+        None
+    };
+
     if is_stream {
         let s = stream_reasoning(
             client,
@@ -126,6 +133,7 @@ async fn reasoning_handler(
             user_email,
             message_id,
             include_reasoning,
+            caveman_prompt.as_deref(),
         );
         Sse::new(s).keep_alive(KeepAlive::default()).into_response()
     } else {
@@ -136,6 +144,7 @@ async fn reasoning_handler(
             user_email,
             message_id,
             include_reasoning,
+            caveman_prompt.as_deref(),
         )
         .await
     }
@@ -148,12 +157,12 @@ async fn non_stream_reasoning(
     user_email: String,
     message_id: String,
     include_reasoning: bool,
+    caveman_prompt: Option<&str>,
 ) -> Response {
     let model_id = req.model.clone().replace("bedrock/", "");
     let model_name = req.model.clone();
-    let start_time = tokio::time::Instant::now();
 
-    let payload = build_converse_payload(&req);
+    let payload = build_converse_payload(&req, caveman_prompt);
 
     let sdk_call = client
         .converse()
@@ -198,7 +207,6 @@ async fn non_stream_reasoning(
         }
     }
 
-    let _total_duration_ms = start_time.elapsed().as_millis() as u64;
 
     spawn_log(logger, user_email, model_name.clone(), p, c);
 
@@ -269,7 +277,10 @@ async fn non_stream_reasoning(
 
     match serde_json::to_string(&full_resp) {
         Ok(json) => (StatusCode::OK, [("content-type", "application/json")], json).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(e) => {
+            tracing::warn!("Failed to serialize reasoning response: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 
@@ -280,6 +291,7 @@ fn stream_reasoning(
     user_email: String,
     _message_id: String,
     _include_reasoning: bool,
+    caveman_prompt: Option<&str>,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let model_id = req.model.clone().replace("bedrock/", "");
     let model_name = req.model.clone();
@@ -291,7 +303,7 @@ fn stream_reasoning(
         .unwrap_or_default()
         .as_secs();
 
-    let payload = build_converse_payload(&req);
+    let payload = build_converse_payload(&req, caveman_prompt);
 
     async_stream::stream! {
         let sdk_call = client.converse_stream()
@@ -308,7 +320,6 @@ fn stream_reasoning(
 
         let mut ttft_ms: Option<u64> = None;
         let mut metrics = (0u32, 0u32);
-        let _reasoning_text = String::new();
         let mut text_accumulated = String::new();
 
         while let Ok(Some(event)) = resp.stream.recv().await {

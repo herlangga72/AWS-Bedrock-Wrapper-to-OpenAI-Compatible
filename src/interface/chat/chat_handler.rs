@@ -1,6 +1,6 @@
 //! Standard chat handler using Converse API
 
-use crate::domain::chat::ChatRequest;
+use crate::domain::chat::{caveman_system_prompt, detect_caveman_activation, ChatRequest};
 use crate::domain::logging::ClickHouseLogger;
 use crate::infrastructure::bedrock::converse::build_converse_payload;
 use crate::infrastructure::cloudflare::CloudflareClient;
@@ -185,6 +185,14 @@ pub async fn chat_handler(
 
     let is_stream = req.stream.unwrap_or(true);
 
+    // Detect caveman mode from messages
+    let caveman_active = detect_caveman_activation(&req.messages);
+    let caveman_prompt = if caveman_active {
+        Some(caveman_system_prompt("full"))
+    } else {
+        None
+    };
+
     // Check if this is a Cloudflare model
     let is_cloudflare = req.model.starts_with("@cf/");
 
@@ -201,11 +209,13 @@ pub async fn chat_handler(
             if is_stream {
                 let s = stream_cloudflare(
                     cf_client, model_id, model_name, req, logger, user_email, message_id,
+                    caveman_prompt,
                 );
                 return Sse::new(s).keep_alive(KeepAlive::default()).into_response();
             } else {
                 return non_stream_cloudflare(
                     cf_client, model_id, model_name, req, logger, user_email, message_id,
+                    caveman_prompt,
                 )
                 .await;
             }
@@ -220,12 +230,12 @@ pub async fn chat_handler(
 
     if is_stream {
         let s = stream_converse(
-            client, model_id, model_name, req, logger, user_email, message_id,
+            client, model_id, model_name, req, logger, user_email, message_id, caveman_prompt.as_deref(),
         );
         Sse::new(s).keep_alive(KeepAlive::default()).into_response()
     } else {
         non_stream(
-            client, model_id, model_name, req, logger, user_email, message_id,
+            client, model_id, model_name, req, logger, user_email, message_id, caveman_prompt.as_deref(),
         )
         .await
     }
@@ -239,6 +249,7 @@ fn stream_converse(
     logger: Arc<ClickHouseLogger>,
     user_email: String,
     message_id: String,
+    caveman_prompt: Option<&str>,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let start_time = tokio::time::Instant::now();
     let mut ttft_ms: Option<u64> = None;
@@ -248,7 +259,7 @@ fn stream_converse(
         .unwrap_or_default()
         .as_secs();
 
-    let payload = build_converse_payload(&req);
+    let payload = build_converse_payload(&req, caveman_prompt);
 
     async_stream::stream! {
         let sdk_call = client.converse_stream()
@@ -368,9 +379,10 @@ async fn non_stream(
     logger: Arc<ClickHouseLogger>,
     user_email: String,
     message_id: String,
+    caveman_prompt: Option<&str>,
 ) -> Response {
     let start_time = tokio::time::Instant::now();
-    let payload = build_converse_payload(&req);
+    let payload = build_converse_payload(&req, caveman_prompt);
 
     let sdk_call = client
         .converse()
@@ -467,7 +479,8 @@ fn stream_cloudflare(
     logger: Arc<ClickHouseLogger>,
     user_email: String,
     message_id: String,
-) -> impl Stream<Item = Result<Event, Infallible>> {
+    caveman_prompt: Option<String>,
+) -> impl Stream<Item = Result<Event, Infallible>> + 'static {
     let start_time = tokio::time::Instant::now();
     let mut ttft_ms: Option<u64> = None;
     let request_id = message_id;
@@ -477,7 +490,7 @@ fn stream_cloudflare(
         .as_secs();
 
     async_stream::stream! {
-        let cf_resp = match client.chat_streaming(req).await {
+        let cf_resp = match client.chat_streaming(req, caveman_prompt).await {
             Ok(r) => r,
             Err(e) => {
                 yield Ok(Event::default().data(format!(r#"{{"error":"{}"}}"#, e)));
@@ -539,9 +552,10 @@ async fn non_stream_cloudflare(
     logger: Arc<ClickHouseLogger>,
     user_email: String,
     message_id: String,
+    caveman_prompt: Option<String>,
 ) -> Response {
     let start_time = tokio::time::Instant::now();
-    let cf_resp = match client.chat(req).await {
+    let cf_resp = match client.chat(req, caveman_prompt).await {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
     };

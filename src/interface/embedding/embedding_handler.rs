@@ -5,6 +5,7 @@ use crate::domain::embedding::{
     OpenAiEmbeddingResponse, OpenAiUsage,
 };
 use crate::shared::app_state::AppState;
+use crate::shared::constants::NOVA_EMBED_MODEL_ID;
 use crate::shared::errors::error_response;
 
 use aws_sdk_bedrockruntime::primitives::Blob;
@@ -13,8 +14,6 @@ use axum_extra::{
     headers::{authorization::Bearer, Authorization},
     TypedHeader,
 };
-
-const NOVA_MODEL_ID: &str = "amazon.nova-2-multimodal-embeddings-v1:0";
 
 pub async fn handle_embeddings(
     State(state): State<AppState>,
@@ -56,7 +55,7 @@ pub async fn handle_embeddings(
     let res = match state
         .client
         .invoke_model()
-        .model_id(NOVA_MODEL_ID)
+        .model_id(NOVA_EMBED_MODEL_ID)
         .content_type("application/json")
         .accept("application/json")
         .body(Blob::new(request_body))
@@ -88,7 +87,7 @@ pub async fn handle_embeddings(
 
     let response = OpenAiEmbeddingResponse {
         object: "list",
-        model: NOVA_MODEL_ID,
+        model: NOVA_EMBED_MODEL_ID,
         data: vec![OpenAiEmbeddingData {
             object: "embedding",
             embedding: embedding_entry.embedding,

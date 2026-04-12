@@ -2,6 +2,7 @@
 //! Maps OpenAI-compatible parameters to model-specific parameters
 //! Uses lowest common denominator approach
 
+use crate::shared::constants::*;
 use serde::{Deserialize, Serialize};
 
 /// AI vendor enumeration
@@ -137,7 +138,7 @@ fn claude_capabilities(model_id: &str) -> ModelCapabilities {
         supports_thinking,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(4096),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_CLAUDE),
             temperature: Some(1.0),
             top_p: Some(0.9),
             stop_sequences: None,
@@ -170,7 +171,7 @@ fn deepseek_capabilities(model_id: &str) -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: model_id.contains("r1"),
         base_params: BaseParams {
-            max_tokens: Some(8192),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_DEEPSEEK),
             temperature: Some(0.7),
             top_p: Some(0.9),
             stop_sequences: None,
@@ -196,7 +197,7 @@ fn cohere_command_capabilities() -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(2048),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_COHERE),
             temperature: Some(0.3),
             top_p: Some(0.75),
             stop_sequences: None,
@@ -222,7 +223,7 @@ fn ai21_jurassic_capabilities() -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(2048),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_AI21),
             temperature: Some(0.5),
             top_p: Some(0.5),
             stop_sequences: None,
@@ -248,7 +249,7 @@ fn mistral_capabilities() -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(4096),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_MISTRAL),
             temperature: Some(0.5),
             top_p: Some(0.9),
             stop_sequences: None,
@@ -274,7 +275,7 @@ fn meta_llama_capabilities() -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(512),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_LLAMA),
             temperature: Some(0.5),
             top_p: Some(0.9),
             stop_sequences: None,
@@ -300,7 +301,7 @@ fn amazon_titan_capabilities() -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(2048),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_TITAN),
             temperature: Some(0.5),
             top_p: Some(0.9),
             stop_sequences: None,
@@ -326,7 +327,7 @@ fn amazon_nova_capabilities() -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(4096),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_NOVA),
             temperature: Some(0.7),
             top_p: Some(0.9),
             stop_sequences: None,
@@ -366,7 +367,7 @@ fn cloudflare_capabilities(model_id: &str) -> ModelCapabilities {
         supports_thinking: false,
         supports_reasoning: false,
         base_params: BaseParams {
-            max_tokens: Some(256),
+            max_tokens: Some(DEFAULT_MAX_TOKENS_CLOUDFLARE),
             temperature: Some(0.7),
             top_p: Some(0.9),
             stop_sequences: None,

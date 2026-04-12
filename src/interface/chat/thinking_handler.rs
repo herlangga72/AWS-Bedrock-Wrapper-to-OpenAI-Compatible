@@ -1,7 +1,7 @@
 //! Extended thinking handler for Claude models on AWS Bedrock
 //! Routes to reasoning handler for DeepSeek R1
 
-use crate::domain::chat::{get_model_capabilities, ChatRequest, Content, ContentBlock};
+use crate::domain::chat::{caveman_system_prompt, detect_caveman_activation, get_model_capabilities, ChatRequest, Content, ContentBlock};
 use crate::domain::logging::ClickHouseLogger;
 use crate::infrastructure::bedrock::invoke::{
     build_thinking_request, invoke_thinking_model, parse_thinking_params,
@@ -161,7 +161,13 @@ async fn non_stream_thinking(
     let start_time = tokio::time::Instant::now();
 
     let (max_tokens, budget_tokens) = parse_thinking_params(&req);
-    let body = build_thinking_request(&req, max_tokens, budget_tokens);
+    let caveman_active = detect_caveman_activation(&req.messages);
+    let caveman_prompt = if caveman_active {
+        Some(caveman_system_prompt("full"))
+    } else {
+        None
+    };
+    let body = build_thinking_request(&req, max_tokens, budget_tokens, caveman_prompt.as_deref());
 
     let resp = match invoke_thinking_model(&client, &model_id, &body).await {
         Ok(r) => r,
@@ -259,11 +265,18 @@ fn non_stream_as_stream(
 
     let (max_tokens, budget_tokens) = parse_thinking_params(&req);
 
+    let caveman_active = detect_caveman_activation(&req.messages);
+    let caveman_prompt = if caveman_active {
+        Some(caveman_system_prompt("full"))
+    } else {
+        None
+    };
+
     async_stream::stream! {
         // Open Web UI format: thinking block start
         yield Ok(Event::default().data(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#));
 
-        let body = build_thinking_request(&req, max_tokens, budget_tokens);
+        let body = build_thinking_request(&req, max_tokens, budget_tokens, caveman_prompt.as_deref());
         let resp = match invoke_thinking_model(&client, &model_id, &body).await {
             Ok(r) => r,
             Err(e) => {
