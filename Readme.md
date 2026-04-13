@@ -1,115 +1,201 @@
-# AWS Bedrock to OpenAI-Compatible API Gateway
+# AWS Bedrock & Cloudflare Workers AI to OpenAI-Compatible API Gateway
 
 [![Rust](https://img.shields.io/badge/Language-Rust-black?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![AWS Bedrock](https://img.shields.io/badge/Service-AWS_Bedrock-FF9900?style=flat-square&logo=amazon-aws&logoColor=white)](https://aws.amazon.com/bedrock/)
+[![Cloudflare](https://img.shields.io/badge/Service-Cloudflare_Workers_AI-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers-ai/)
 [![License-MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](https://opensource.org/licenses/MIT)
 
-A high-performance translation layer designed to map Amazon Bedrock foundation models to the industry-standard OpenAI API schema.
+A high-performance, multi-vendor AI proxy that translates OpenAI-compatible API requests to AWS Bedrock and Cloudflare Workers AI endpoints.
 
 ---
 
-### Security Disclosure: Proof of Concept
-**This repository is currently a Proof of Concept (PoC) and is not intended for production environments.**
+## Features
 
-The current iteration lacks a robust multi-tenant authentication framework. Exposing this proxy to public networks or untrusted environments presents a significant security risk. It is intended strictly for local development, internal benchmarking, and isolated architectural evaluation. Unauthorized access could result in significant AWS infrastructure costs.
-
----
-
-## Technical Overview
-
-The **AWS-Bedrock-Wrapper-to-OpenAI-Compatible** project is a low-latency reverse proxy authored in Rust. It addresses the interoperability gap between Amazon’s proprietary invocation mechanisms and the widely adopted OpenAI API specification (`/v1/chat/completions`).
-
-By implementing this gateway, engineering teams can utilize existing OpenAI-compatible SDKs and agentic frameworks (e.g., LangChain, AutoGPT, or custom frontends) while leveraging AWS Bedrock’s managed foundation models. This architecture mitigates vendor lock-in and facilitates easier migration between cloud providers.
-
-### Primary Objectives
-1.  **Protocol Standardization:** Mapping proprietary AWS payloads to the OpenAI schema to support the broader ecosystem of AI tooling.
-2.  **Operational Telemetry:** Resolving the opacity of real-time usage data in Bedrock by routing granular token metrics to a ClickHouse analytical database.
+- **Multi-Vendor Support**: Route requests to AWS Bedrock or Cloudflare Workers AI based on model prefix
+- **OpenAI-Compatible**: Use existing OpenAI SDKs and tools
+- **Domain-Driven Design**: Clean, maintainable architecture
+- **Streaming Support**: Full streaming response handling
+- **Usage Logging**: ClickHouse integration for token tracking
+- **Extensible**: Easy to add new AI vendors
 
 ---
 
-## Architectural Topology
+## Supported Models
 
-The system utilizes a decoupled architecture to ensure that telemetry ingestion does not block the primary inference request-response cycle.
+### AWS Bedrock
+| Provider | Models |
+|----------|--------|
+| Anthropic | claude-3-5-sonnet, claude-opus-4-5, claude-sonnet-4-5, claude-haiku-4-5 |
+| DeepSeek | r1, chat |
+| Cohere | command-r, command-r-plus |
+| Mistral | mistral-7b-instruct, mistral-large |
+| Meta | llama-3.1-70b-instruct, llama-3.1-8b-instruct |
+| Amazon | titan, nova |
 
-| Component | Technology | Functional Responsibility |
-| :--- | :--- | :--- |
-| **Translation Proxy** | Rust | Concurrent HTTP handling, JSON serialization, and AWS SigV4 request signing. |
-| **Inference Provider** | Amazon Bedrock | Execution of foundation model inference (Claude, Nova, Titan). |
-| **Analytics Engine** | ClickHouse | Columnar storage for high-volume token ingestion and cost aggregation. |
-
-### Cost Aggregation Logic
-The proxy facilitates precise financial oversight by calculating total cost $$C_{total}$$ through the aggregation of request-level token counts against model-specific pricing tiers:
-
-$$C_{total} = \sum_{i=1}^{n} (T_{prompt,i} \times P_{prompt,m(i)} + T_{completion,i} \times P_{completion,m(i)})$$
-
----
-
-## Prerequisites
-
-* **Rust Toolchain:** Latest stable version of Cargo and Rustc.
-* **AWS Credentials:** Local configuration with `IAM` permissions for `bedrock:InvokeModel` and `bedrock:ListFoundationModels`.
-* **ClickHouse Instance:** Required for telemetry. Can be deployed via Docker for development:
-    `docker run -d --name clickhouse-server -p 8123:8123 -p 9000:9000 clickhouse/clickhouse-server`
+### Cloudflare Workers AI
+| Model Prefix | Examples |
+|--------------|----------|
+| `@cf/meta/*` | llama-3.1-8b-instruct |
+| `@cf/deepseek-ai/*` | deepseek-r1-distill-qwen-32b |
+| `@cf/google/*` | gemma-2-2b-it |
+| `@cf/mistral/*` | mistral-7b-instruct |
 
 ---
 
-## Installation and Execution
+## Quick Start
 
-### 1. Clone Repository
+### 1. Clone and Configure
 ```bash
 git clone https://github.com/herlangga72/AWS-Bedrock-Wrapper-to-OpenAI-Compatible.git
 cd AWS-Bedrock-Wrapper-to-OpenAI-Compatible
-```
-### 2. Configuration
-The project is transitioning to environment-based configuration.
-
-```bash
 cp .env.example .env
-# Define AWS_REGION and CLICKHOUSE_URL within the .env file.
 ```
+
+### 2. Configure Environment
+```bash
+# AWS Bedrock (required)
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your-key
+AWS_SECRET_ACCESS_KEY=your-secret
+
+# Cloudflare (optional - for @cf/ models)
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+CLOUDFLARE_API_TOKEN=your-api-token
+
+# Authentication
+DEFAULT_API_KEY=your-api-key
+```
+
 ### 3. Build and Run
 ```bash
 cargo build --release
-./target/release/aws-bedrock-proxy
+./target/release/aws-bedrock-translation-to-openai
 ```
-## Usage Examples
 
-### Direct API Interaction (cURL)
+### 4. Test
+```bash
+make test  # Run all 70 tests
+```
+
+---
+
+## Model Routing
+
+Requests are routed based on model prefix:
+
+| Model Prefix | Provider |
+|-------------|----------|
+| `@cf/` | Cloudflare Workers AI |
+| `bedrock/` | AWS Bedrock |
+| (others) | AWS Bedrock |
+
+**Example:**
+```bash
+# Cloudflare model
+curl -X POST http://localhost:3001/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -d '{"model": "@cf/meta/llama-3.1-8b-instruct", "messages": [...]}'
+
+# AWS Bedrock model
+curl -X POST http://localhost:3001/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -d '{"model": "anthropic.claude-3-5-sonnet-20240620-v1:0", "messages": [...]}'
+```
+
+---
+
+## Architecture
+
+```
+src/
+├── domain/           # Business logic (DDD)
+│   ├── chat/        # Chat types, capabilities
+│   ├── embedding/   # Embedding types
+│   ├── auth/        # Authentication
+│   └── logging/     # Usage logging
+├── infrastructure/   # External integrations
+│   ├── bedrock/     # AWS Bedrock client
+│   ├── cloudflare/  # Cloudflare Workers AI client
+│   └── cache/       # File-based caching
+├── interface/        # HTTP handlers
+│   ├── chat/        # Chat endpoints
+│   ├── embedding/   # Embedding endpoints
+│   └── models/      # Model listing
+└── shared/          # Shared utilities
+```
+
+---
+
+## Docker Support
 
 ```bash
-curl [http://127.0.0.1:8080/v1/chat/completions](http://127.0.0.1:8080/v1/chat/completions) \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer LOCAL_DEV_TOKEN" \
-  -d '{
-    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "messages": [{"role": "user", "content": "Analyze the efficiency of Rust in network proxies."}],
-    "temperature": 0.1
-  }'
+# Start all services
+docker-compose up --build
+
+# Start infrastructure only
+make up
+
+# View logs
+make logs
+
+# Stop services
+make down
 ```
 
-### Python SDK Integration
-```Python
-from openai import OpenAI
-client = OpenAI(
-    base_url="[http://127.0.0.1:8080/v1](http://127.0.0.1:8080/v1)",
-    api_key="local-dev-bypass"
-)
+| Service | Port | Purpose |
+|---------|------|---------|
+| app | 3001 | Main application |
+| clickhouse | 8123 | Usage logging |
+| localstack | 4566 | AWS mocking |
 
-response = client.chat.completions.create(
-    model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-    messages=[{"role": "user", "content": "Connection test."}]
-)
+---
 
-print(response.choices[0].message.content)
+## Testing
+
+```
+Total Tests: 70 (68 unit + 2 integration)
+Coverage: 21.50%
 ```
 
-## Development Roadmap
-| Milestone          | Technical Objective   | Operational Impact                                                                 |
-|-------------------|----------------------|-------------------------------------------------------------------------------------|
-| State Management  | Context Offloading   | Maintains conversational state via local pointers to reduce network payload size.  |
-| Efficiency        | Context Compression  | Algorithmic pruning of prompts to minimize token expenditure on long-form context. |
-| Security          | JWT Authentication   | Implementation of secure, multi-tenant API key management.                         |
+```bash
+make test              # All tests
+make test-unit         # Unit tests only (68)
+make test-integration  # Integration tests (2)
+make coverage           # Coverage report
+```
 
+---
 
-## Contribution and License
-Contributions regarding security hardening and context management are prioritized. This software is released under the MIT License.
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/chat/completions` | Chat completions |
+| POST | `/v1/embeddings` | Embeddings |
+| GET | `/v1/models` | List available models |
+
+---
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AWS_REGION` | Yes | us-east-1 | AWS region |
+| `DEFAULT_API_KEY` | Yes | - | API authentication |
+| `CLOUDFLARE_ACCOUNT_ID` | No | - | Cloudflare account |
+| `CLOUDFLARE_API_TOKEN` | No | - | Cloudflare API token |
+| `CLICKHOUSE_URL` | No | http://127.0.0.1:8123 | ClickHouse URL |
+| `SERVER_PORT` | No | 3001 | Server port |
+
+---
+
+## Documentation
+
+- [Architecture](./docs/ARCHITECTURE.md) - Detailed codebase documentation
+- [Test Coverage](./docs/TEST_COVERAGE.md) - Test inventory and coverage
+
+---
+
+## License
+
+MIT

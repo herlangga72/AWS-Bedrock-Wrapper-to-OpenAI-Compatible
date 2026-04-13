@@ -1,7 +1,11 @@
-mod handlers;
-mod models;
+//! Main entry point for the AWS Bedrock Translation to OpenAI Compatible API
 
-use arc_swap::ArcSwap;
+mod application;
+mod domain;
+mod infrastructure;
+mod interface;
+mod shared;
+
 use aws_config::Region;
 use aws_sdk_bedrock::Client as MgmtClient;
 use aws_sdk_bedrockruntime::Client as RuntimeClient;
@@ -9,77 +13,115 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use bytes::Bytes;
-use handlers::{auth::Authentication, logger::ClickHouseLogger};
+use infrastructure::cloudflare::CloudflareClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Clone)]
-pub struct AppState {
-    pub client: RuntimeClient,
-    pub mgmt_client: MgmtClient,
-    pub logger: ClickHouseLogger,
-    pub file_cache: Arc<ArcSwap<HashMap<String, Bytes>>>,
-    pub auth: handlers::auth::Authentication,
+use domain::auth::Authentication;
+use domain::logging::ClickHouseLogger;
+use shared::app_state::AppState;
+use shared::constants::*;
+
+/// Initialize Cloudflare client (optional - returns None if not configured)
+fn init_cloudflare_client() -> Option<CloudflareClient> {
+    let account_id = std::env::var("CLOUDFLARE_ACCOUNT_ID").ok()?;
+    let api_token = std::env::var("CLOUDFLARE_API_TOKEN").ok()?;
+
+    Some(
+        CloudflareClient::builder()
+            .account_id(account_id)
+            .api_token(api_token)
+            .build()
+            .expect("Cloudflare client should build"),
+    )
 }
 
+/// Initialize and run the server
 #[tokio::main]
 async fn main() {
-    // Load .env file if it exists
+    if let Err(e) = run().await {
+        eprintln!("Failed to start server: {e}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), String> {
     dotenvy::dotenv().ok();
 
-    // 1. AWS Configuration from ENV
-    let region_str = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+    // Initialize AWS config
+    let region_str = std::env::var("AWS_REGION").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let config = aws_config::from_env()
         .region(Region::new(region_str))
         .load()
         .await;
 
+    // Initialize database path
     let api_database =
         std::env::var("DB_API_KEY_LOCATION_SQLITE").unwrap_or_else(|_| "api_keys.db".to_string());
 
-    // 2. Create Clients
+    // Initialize clients
     let runtime_client = RuntimeClient::new(&config);
     let mgmt_client = MgmtClient::new(&config);
+
+    // Initialize auth service
+    let auth_service = Authentication::new(&api_database)
+        .map_err(|e| format!("Failed to initialize auth: {e}"))?;
+
+    // Register default API key
+    let default_key = std::env::var("DEFAULT_API_KEY").map_err(|_| "DEFAULT_API_KEY must be set")?;
+    auth_service
+        .register_key(&default_key, "chat")
+        .map_err(|e| format!("Failed to register API key: {e}"))?;
+
+    // Initialize logger
     let logger = ClickHouseLogger::new();
-    let auth_service =
-        Authentication::new(&api_database).expect("Failed to initialize authentication service");
 
-    let _ = auth_service.register_key(
-        &std::env::var("DEFAULT_API_KEY").expect("API_KEY must be set"),
-        "chat",
-    );
+    // Initialize Cloudflare client (optional)
+    let cloudflare_client = init_cloudflare_client();
 
-    // 4. Setup AppState
     let state = AppState {
         client: runtime_client,
         mgmt_client,
         logger,
-        file_cache: Arc::new(ArcSwap::from_pointee(HashMap::new())),
+        file_cache: Arc::new(arc_swap::ArcSwap::from_pointee(HashMap::new())),
         auth: auth_service,
+        cloudflare_client,
     };
 
-    // let Models Populate
+    // Spawn cache monitor
     let monitor_state = state.clone();
-    tokio::spawn(crate::handlers::models::run_cache_monitor(monitor_state));
+    tokio::spawn(infrastructure::cache::file_cache::run_cache_monitor(
+        monitor_state,
+    ));
 
-    // 5. Build Router
     let app = Router::new()
-        .route("/v1/chat/completions", post(handlers::chat::chat_handler))
-        .route("/v1/models", get(handlers::models::list_models_handler))
+        .route(
+            "/v1/chat/completions",
+            post(interface::chat::chat_with_thinking_handler),
+        )
+        .route(
+            "/v1/models",
+            get(interface::models::models_handler::list_models_handler),
+        )
         .route(
             "/v1/embeddings",
-            post(handlers::embedding::handle_embeddings),
+            post(interface::embedding::embedding_handler::handle_embeddings),
         )
         .with_state(state);
 
-    // 6. Start Server
-    let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "3001".to_string());
+    let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
+    let port = std::env::var("SERVER_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string());
     let addr = format!("{}:{}", host, port);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("Failed to bind to {}: {e}", addr))?;
+
     println!("🚀 Bedrock Proxy listening on {}", addr);
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| format!("Server error: {e}"))?;
+
+    Ok(())
 }

@@ -1,0 +1,22 @@
+FROM rust:1.77-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy source
+COPY Cargo.toml Cargo.lock* ./
+COPY src ./src
+COPY tests ./tests
+COPY Makefile ./
+
+# Build tests
+RUN cargo test --test '*' --no-run 2>/dev/null || true
+
+# Entry point - run integration tests
+CMD ["cargo", "test", "--test", "*"]
