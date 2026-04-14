@@ -39,7 +39,6 @@ struct ThinkingMessage<'a> {
 #[serde(untagged)]
 enum ThinkingContent<'a> {
     Text(&'a str),
-    OwnedText(String),
     Blocks(Vec<ThinkingContentBlock<'a>>),
 }
 
@@ -83,12 +82,10 @@ pub struct ResponseUsage {
 // =============================================================================
 
 /// Build thinking request body for Claude models
-/// If caveman_prompt is Some, prepend a system message with the caveman rules
 pub fn build_thinking_request<'a>(
     req: &'a ChatRequest,
     max_tokens: u32,
     budget_tokens: u32,
-    caveman_prompt: Option<&str>,
 ) -> ThinkingRequestBody<'a> {
     let thinking_block = Some(ThinkingBlock {
         r#type: "enabled",
@@ -96,14 +93,6 @@ pub fn build_thinking_request<'a>(
     });
 
     let mut messages: Vec<ThinkingMessage<'_>> = Vec::new();
-
-    // Prepend caveman system message if activated
-    if let Some(prompt) = caveman_prompt {
-        messages.push(ThinkingMessage {
-            role: "user",
-            content: ThinkingContent::OwnedText(prompt.to_string()),
-        });
-    }
 
     let user_role = "user";
     let assistant_role = "assistant";

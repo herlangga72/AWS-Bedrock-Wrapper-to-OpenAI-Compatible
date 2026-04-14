@@ -29,51 +29,6 @@ pub struct ChatRequest {
     // Thinking params
     #[serde(default)]
     pub thinking: Option<ThinkingRequest>,
-    // Caveman mode - activated via /caveman on in messages
-    #[serde(default)]
-    pub caveman_mode: Option<bool>,
-}
-
-/// Check if any message contains "/caveman on" command
-pub fn detect_caveman_activation(messages: &[Message]) -> bool {
-    messages
-        .iter()
-        .last()
-        .map(|m| {
-            let text = match &m.content {
-                Content::Text(s) => s.clone(),
-                Content::Blocks(blocks) => blocks
-                    .iter()
-                    .filter_map(|b| b.text.clone())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            };
-            text.trim().to_lowercase().contains("/caveman on")
-        })
-        .unwrap_or(false)
-}
-
-/// Get caveman system prompt based on intensity level
-pub fn caveman_system_prompt(mode: &str) -> String {
-    match mode {
-        "lite" => "Respond terse. No filler (just/really/basically/actually/simply). \
-            No hedging. Professional but tight. Drop articles where flow allows. \
-            Technical terms exact. Code unchanged.".to_string(),
-        "ultra" => "Respond ultra-compressed. Abbreviate (DB/auth/config/req/res/fn/impl). \
-            Strip conjunctions. Arrows for causality (X → Y). One word when one word enough. \
-            Drop articles. Fragments OK.".to_string(),
-        "wenyan-lite" => "Respond semi-classical. Drop filler/hedging, keep grammar structure. \
-            Classical register.".to_string(),
-        "wenyan-full" => "Respond 文言文. Maximum classical terseness. \
-            Verbs precede objects. Subjects often omitted. Use classical particles (之/乃/為/其).".to_string(),
-        "wenyan-ultra" => "Respond extreme abbreviated classical Chinese. Ultra terse. Maximum compression.".to_string(),
-        _ => "Respond terse like smart caveman. All technical substance stay. Only fluff die. \
-            Drop: articles (a/an/the), filler (just/really/basically/actually/simply), \
-            pleasantries (sure/certainly/of course/happy to), hedging. Fragments OK. \
-            Short synonyms. Technical terms exact. Code blocks unchanged. \
-            Pattern: [thing] [action] [reason]. [next step]. \
-            Off only: 'stop caveman' or 'normal mode'.".to_string(),
-    }
 }
 
 /// Thinking configuration for Claude extended thinking

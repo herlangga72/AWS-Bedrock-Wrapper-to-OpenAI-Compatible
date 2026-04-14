@@ -16,16 +16,10 @@ pub struct ConversePayload {
 }
 
 /// Build payload for Converse API from ChatRequest
-/// If caveman_prompt is Some, prepend caveman rules to system blocks
-pub fn build_converse_payload(req: &ChatRequest, caveman_prompt: Option<&str>) -> ConversePayload {
+pub fn build_converse_payload(req: &ChatRequest) -> ConversePayload {
     let total_len = req.messages.len();
     let mut bedrock_messages = Vec::with_capacity(total_len);
     let mut system_blocks = Vec::new();
-
-    // Prepend caveman system prompt if activated
-    if let Some(prompt) = caveman_prompt {
-        system_blocks.push(SystemContentBlock::Text(prompt.to_string()));
-    }
 
     let (base_params, _) = map_openai_params(
         &req.model,

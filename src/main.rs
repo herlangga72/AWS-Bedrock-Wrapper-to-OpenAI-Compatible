@@ -95,6 +95,7 @@ async fn run() -> Result<(), String> {
     ));
 
     let app = Router::new()
+        // Backward-compatible routes
         .route(
             "/v1/chat/completions",
             post(interface::chat::chat_with_thinking_handler),
@@ -106,6 +107,16 @@ async fn run() -> Result<(), String> {
         .route(
             "/v1/embeddings",
             post(interface::embedding::embedding_handler::handle_embeddings),
+        )
+        // OpenAI-compatible prefixed routes
+        .route(
+            "/openai/v1/chat/completions",
+            post(interface::chat::chat_with_thinking_handler),
+        )
+        // Anthropic-native prefixed routes
+        .route(
+            "/claude/v1/messages",
+            post(interface::anthropic::messages_handler::claude_messages_handler),
         )
         .with_state(state);
 

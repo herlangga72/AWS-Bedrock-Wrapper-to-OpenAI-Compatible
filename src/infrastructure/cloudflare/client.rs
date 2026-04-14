@@ -90,17 +90,8 @@ impl CloudflareClient {
     }
 
     /// Execute a chat completion request
-    /// If caveman_prompt is Some, prepend a system message with the caveman rules
-    pub async fn chat(&self, mut req: ChatRequest, caveman_prompt: Option<String>) -> Result<CloudflareResponse, String> {
+    pub async fn chat(&self, req: ChatRequest) -> Result<CloudflareResponse, String> {
         let url = self.endpoint_url(&req.model);
-
-        // Inject caveman system prompt if activated
-        if let Some(prompt) = caveman_prompt {
-            req.messages.insert(0, Message {
-                role: "system".to_string(),
-                content: Content::Text(prompt),
-            });
-        }
 
         let cf_req = CloudflareRequest {
             messages: req.messages.into_iter().map(Into::into).collect(),
@@ -131,20 +122,10 @@ impl CloudflareClient {
     }
 
     /// Execute a streaming chat completion request
-    /// If caveman_prompt is Some, prepend a system message with the caveman rules
     pub async fn chat_streaming(
         &self,
-        mut req: ChatRequest,
-        caveman_prompt: Option<String>,
+        req: ChatRequest,
     ) -> Result<impl Stream<Item = Result<String, String>>, String> {
-        // Inject caveman system prompt if activated
-        if let Some(prompt) = caveman_prompt {
-            req.messages.insert(0, Message {
-                role: "system".to_string(),
-                content: Content::Text(prompt),
-            });
-        }
-
         let url = self.endpoint_url(&req.model);
 
         let _cf_req = CloudflareRequest {

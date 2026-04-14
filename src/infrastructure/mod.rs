@@ -6,6 +6,7 @@
 //! - `persistence` - SQLite auth, ClickHouse logging
 //! - `cache` - File-based caching
 
+pub mod anthropic_translator;
 pub mod bedrock;
 pub mod cache;
 pub mod cloudflare;
