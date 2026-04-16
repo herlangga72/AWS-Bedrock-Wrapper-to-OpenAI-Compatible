@@ -29,6 +29,52 @@ pub struct ChatRequest {
     // Thinking params
     #[serde(default)]
     pub thinking: Option<ThinkingRequest>,
+    // Tool use
+    #[serde(default)]
+    pub tools: Option<Vec<ToolDefinition>>,
+    #[serde(default)]
+    pub tool_choice: Option<ToolChoice>,
+}
+
+/// Tool definition for function calling (request-side)
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct ToolDefinition {
+    pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<ToolFunction>,
+}
+
+/// Tool function definition
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct ToolFunction {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+}
+
+/// Tool choice configuration
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    /// "auto" - model decides
+    Auto,
+    /// "none" - disable tools
+    None,
+    /// Specific function name
+    Function(FunctionChoice),
+}
+
+/// Function name for tool choice
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct FunctionChoice {
+    pub function: FunctionName,
+}
+
+/// Function name wrapper
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct FunctionName {
+    pub name: String,
 }
 
 /// Thinking configuration for Claude extended thinking
@@ -43,6 +89,31 @@ pub struct ThinkingRequest {
 pub struct Message {
     pub role: String,
     pub content: Content,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+/// Tool call from model
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct ToolCall {
+    pub id: String,
+    pub r#type: String,
+    pub function: ToolCallFunction,
+}
+
+/// Function call in a tool call
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct ToolCallFunction {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// Tool result from assistant
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct Tool {
+    pub id: String,
+    pub role: String,
+    pub content: String,
 }
 
 /// Content can be plain text or structured blocks

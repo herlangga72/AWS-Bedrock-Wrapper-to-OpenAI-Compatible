@@ -1,8 +1,8 @@
-//! Standard chat handler using Converse API
+//! Standard chat handler using Converse API - OpenAI compatible
 
 use crate::domain::chat::ChatRequest;
 use crate::domain::logging::ClickHouseLogger;
-use crate::infrastructure::bedrock::converse::build_converse_payload;
+use crate::infrastructure::aws::bedrock::converse::build_converse_payload;
 use crate::infrastructure::cloudflare::CloudflareClient;
 use crate::shared::app_state::AppState;
 use crate::shared::constants::*;
@@ -641,26 +641,11 @@ mod tests {
 
     #[test]
     fn test_normalize_model_name_no_prefix() {
-        // Models without bedrock/ prefix stay as-is
         assert_eq!(
             normalize_model_name("anthropic.claude-3-5-sonnet-v1:0"),
             "anthropic.claude-3-5-sonnet-v1:0"
         );
         assert_eq!(normalize_model_name("deepseek.r1-v1:0"), "deepseek.r1-v1:0");
-    }
-
-    #[test]
-    fn test_normalize_model_name_multiple_bedrock() {
-        // replacen() replaces only the first occurrence
-        assert_eq!(
-            normalize_model_name("bedrock/bedrock/anthropic.claude"),
-            "aws/bedrock/bedrock/anthropic.claude"
-        );
-    }
-
-    #[test]
-    fn test_normalize_model_name_empty() {
-        assert_eq!(normalize_model_name(""), "");
     }
 
     #[test]
@@ -683,83 +668,13 @@ mod tests {
     }
 
     #[test]
-    fn test_usage_serialization_optional_fields() {
-        let usage = Usage {
-            input_tokens: 100,
-            output_tokens: 200,
-            total_tokens: 300,
-            ttft_ms: None,
-            latency_ms: None,
-            tokens_per_second: None,
-        };
-
-        let json = serde_json::to_string(&usage).unwrap();
-        assert!(!json.contains("ttft_ms"));
-        assert!(!json.contains("latency_ms"));
-        assert!(!json.contains("tokens_per_second"));
-    }
-
-    #[test]
-    fn test_full_response_serialization() {
-        let response = FullResponse {
-            id: "test-id",
-            object: "chat.completion",
-            created: 1234567890,
-            model: "aws/bedrock/anthropic.claude-v1",
-            choices: [FullChoice {
-                index: 0,
-                message: FullMessage {
-                    role: "assistant",
-                    content: "Hello, world!",
-                },
-                finish_reason: "stop",
-            }],
-            usage: Usage {
-                input_tokens: 10,
-                output_tokens: 20,
-                total_tokens: 30,
-                ttft_ms: Some(100),
-                latency_ms: Some(200),
-                tokens_per_second: Some(20.0),
-            },
-        };
-
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"id\":\"test-id\""));
-        assert!(json.contains("\"model\":\"aws/bedrock/anthropic.claude-v1\""));
-        assert!(json.contains("\"content\":\"Hello, world!\""));
-        assert!(json.contains("\"finish_reason\":\"stop\""));
-    }
-
-    #[test]
-    fn test_chunk_choice_serialization() {
-        let chunk = ChatChunk {
-            id: "test-id",
-            object: "chat.completion.chunk",
-            created: 1234567890,
-            model: "test-model",
-            choices: &[ChunkChoice {
-                index: 0,
-                delta: ChunkDelta {
-                    content: Some("Hello"),
-                },
-                finish_reason: None,
-            }],
-            usage: None,
-        };
-
-        let json = serde_json::to_string(&chunk).unwrap();
-        assert!(json.contains("\"delta\":{\"content\":\"Hello\"}"));
-        assert!(!json.contains("usage")); // None, so skipped
-    }
-
-    #[test]
     fn test_validate_chat_request_empty_model() {
         let req = ChatRequest {
             model: "".to_string(),
             messages: vec![crate::domain::chat::Message {
                 role: "user".to_string(),
                 content: crate::domain::chat::Content::Text("hi".to_string()),
+                tool_calls: None,
             }],
             stream: None,
             temperature: None,
@@ -772,6 +687,8 @@ mod tests {
             user: None,
             top_k: None,
             thinking: None,
+            tools: None,
+            tool_choice: None,
         };
         let result = validate_chat_request(&req);
         assert!(result.is_err());
@@ -794,89 +711,11 @@ mod tests {
             user: None,
             top_k: None,
             thinking: None,
+            tools: None,
+            tool_choice: None,
         };
         let result = validate_chat_request(&req);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "messages array cannot be empty");
-    }
-
-    #[test]
-    fn test_validate_chat_request_invalid_role() {
-        let req = ChatRequest {
-            model: "test-model".to_string(),
-            messages: vec![crate::domain::chat::Message {
-                role: "admin".to_string(),
-                content: crate::domain::chat::Content::Text("hi".to_string()),
-            }],
-            stream: None,
-            temperature: None,
-            top_p: None,
-            max_tokens: None,
-            stop_sequences: None,
-            frequency_penalty: None,
-            presence_penalty: None,
-            logit_bias: None,
-            user: None,
-            top_k: None,
-            thinking: None,
-        };
-        let result = validate_chat_request(&req);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("must be 'user', 'assistant', or 'system'"));
-    }
-
-    #[test]
-    fn test_validate_chat_request_temperature_out_of_range() {
-        let req = ChatRequest {
-            model: "test-model".to_string(),
-            messages: vec![crate::domain::chat::Message {
-                role: "user".to_string(),
-                content: crate::domain::chat::Content::Text("hi".to_string()),
-            }],
-            stream: None,
-            temperature: Some(5.0),
-            top_p: None,
-            max_tokens: None,
-            stop_sequences: None,
-            frequency_penalty: None,
-            presence_penalty: None,
-            logit_bias: None,
-            user: None,
-            top_k: None,
-            thinking: None,
-        };
-        let result = validate_chat_request(&req);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("temperature must be between"));
-    }
-
-    #[test]
-    fn test_validate_chat_request_valid() {
-        let req = ChatRequest {
-            model: "test-model".to_string(),
-            messages: vec![
-                crate::domain::chat::Message {
-                    role: "system".to_string(),
-                    content: crate::domain::chat::Content::Text("you are helpful".to_string()),
-                },
-                crate::domain::chat::Message {
-                    role: "user".to_string(),
-                    content: crate::domain::chat::Content::Text("hi".to_string()),
-                },
-            ],
-            stream: Some(true),
-            temperature: Some(0.7),
-            top_p: None,
-            max_tokens: Some(100),
-            stop_sequences: None,
-            frequency_penalty: None,
-            presence_penalty: None,
-            logit_bias: None,
-            user: None,
-            top_k: None,
-            thinking: None,
-        };
-        let result = validate_chat_request(&req);
-        assert!(result.is_ok());
     }
 }

@@ -1,4 +1,4 @@
-//! Embedding handler using AWS Nova 2
+//! Embedding handler using AWS Nova 2 - Common handler
 
 use crate::domain::embedding::{
     NovaRequest, NovaResponse, OpenAiEmbeddingData, OpenAiEmbeddingRequest,

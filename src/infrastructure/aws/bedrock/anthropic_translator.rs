@@ -1,4 +1,6 @@
-//! Translate AnthropicMessagesRequest to Bedrock Converse payload
+//! Anthropic-to-Bedrock Converse API translation
+//!
+//! Translates Anthropic native /v1/messages requests to AWS Bedrock Converse API calls.
 
 use aws_sdk_bedrockruntime::types::{
     ContentBlock as BContentBlock, ConversationRole, InferenceConfiguration,

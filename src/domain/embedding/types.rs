@@ -1,7 +1,6 @@
-//! Embedding domain types
+//! Embedding domain types - Data structures for text embeddings
 
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 
 // =============================================================================
 // Request Types
@@ -14,37 +13,10 @@ pub struct OpenAiEmbeddingRequest {
 }
 
 // =============================================================================
-// Internal Request Types (for AWS Nova)
-// =============================================================================
-
-#[derive(Serialize)]
-pub struct NovaRequest<'a> {
-    #[serde(rename = "taskType")]
-    task_type: &'static str,
-    #[serde(rename = "singleEmbeddingParams")]
-    params: NovaParams<'a>,
-}
-
-#[derive(Serialize)]
-struct NovaParams<'a> {
-    #[serde(rename = "embeddingPurpose")]
-    embedding_purpose: &'static str,
-    #[serde(rename = "embeddingDimension")]
-    dimension: u32,
-    text: NovaText<'a>,
-}
-
-#[derive(Serialize)]
-struct NovaText<'a> {
-    #[serde(rename = "truncationMode")]
-    truncation_mode: &'static str,
-    value: Cow<'a, str>,
-}
-
-// =============================================================================
 // AWS Response Types
 // =============================================================================
 
+/// Nova canvas embedding response from AWS
 #[derive(Deserialize)]
 pub struct NovaResponse {
     pub embeddings: Vec<NovaEmbeddingEntry>,
@@ -52,6 +24,7 @@ pub struct NovaResponse {
     pub token_count: u64,
 }
 
+/// Single embedding result from Nova
 #[derive(Deserialize)]
 pub struct NovaEmbeddingEntry {
     pub embedding: Vec<f32>,
@@ -61,6 +34,7 @@ pub struct NovaEmbeddingEntry {
 // OpenAI Response Types
 // =============================================================================
 
+/// OpenAI-compatible embedding response
 #[derive(Serialize)]
 pub struct OpenAiEmbeddingResponse {
     pub object: &'static str,
@@ -69,6 +43,7 @@ pub struct OpenAiEmbeddingResponse {
     pub usage: OpenAiUsage,
 }
 
+/// Embedding vector with index
 #[derive(Serialize)]
 pub struct OpenAiEmbeddingData {
     pub object: &'static str,
@@ -76,36 +51,11 @@ pub struct OpenAiEmbeddingData {
     pub index: usize,
 }
 
+/// Usage statistics for embedding
 #[derive(Serialize)]
 pub struct OpenAiUsage {
     pub prompt_tokens: u64,
     pub total_tokens: u64,
-}
-
-// =============================================================================
-// Builder for Nova Request
-// =============================================================================
-
-impl<'a> NovaRequest<'a> {
-    pub fn new(text: &'a str) -> Self {
-        Self {
-            task_type: "SINGLE_EMBEDDING",
-            params: NovaParams {
-                embedding_purpose: "GENERIC_INDEX",
-                dimension: 3072,
-                text: NovaText {
-                    truncation_mode: "END",
-                    value: Cow::Borrowed(text),
-                },
-            },
-        }
-    }
-
-    #[cfg(test)]
-    pub fn with_dimension(mut self, dimension: u32) -> Self {
-        self.params.dimension = dimension;
-        self
-    }
 }
 
 #[cfg(test)]
@@ -125,35 +75,6 @@ mod tests {
         let json = r#"{"input": ["Single text"]}"#;
         let req: OpenAiEmbeddingRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.input.len(), 1);
-    }
-
-    #[test]
-    fn test_nova_request_builder() {
-        let req = NovaRequest::new("Hello world");
-
-        assert_eq!(req.task_type, "SINGLE_EMBEDDING");
-        assert_eq!(req.params.embedding_purpose, "GENERIC_INDEX");
-        assert_eq!(req.params.dimension, 3072);
-        assert_eq!(req.params.text.truncation_mode, "END");
-        assert_eq!(req.params.text.value, "Hello world");
-    }
-
-    #[test]
-    fn test_nova_request_with_custom_dimension() {
-        let req = NovaRequest::new("Hello").with_dimension(1024);
-        assert_eq!(req.params.dimension, 1024);
-    }
-
-    #[test]
-    fn test_nova_request_serialization() {
-        let req = NovaRequest::new("Test text");
-        let json = serde_json::to_string(&req).unwrap();
-
-        assert!(json.contains("\"taskType\":\"SINGLE_EMBEDDING\""));
-        assert!(json.contains("\"embeddingPurpose\":\"GENERIC_INDEX\""));
-        assert!(json.contains("\"embeddingDimension\":3072"));
-        assert!(json.contains("\"truncationMode\":\"END\""));
-        assert!(json.contains("\"value\":\"Test text\""));
     }
 
     #[test]

@@ -1,12 +1,10 @@
-//! Interface layer - HTTP handlers and API endpoints
+//! Interface layer - HTTP handlers organized by API compatibility
 //!
-//! Contains:
-//! - `anthropic` - Anthropic native /v1/messages endpoint
-//! - `chat` - Chat completion endpoints (standard, thinking, reasoning)
-//! - `embedding` - Embedding endpoints
-//! - `models` - Model listing endpoint
+//! Structure:
+//! - `openai/` - OpenAI-compatible endpoints (/v1/chat/completions, etc.)
+//! - `anthropic/` - Anthropic-native endpoints (/v1/messages)
+//! - `common/` - Shared handlers (models, embeddings)
 
 pub mod anthropic;
-pub mod chat;
-pub mod embedding;
-pub mod models;
+pub mod common;
+pub mod openai;

@@ -1,4 +1,4 @@
-//! Models listing handler
+//! Models listing handler - Common handler
 
 use crate::shared::app_state::AppState;
 use axum::{

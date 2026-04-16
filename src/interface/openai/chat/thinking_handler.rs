@@ -1,13 +1,13 @@
-//! Extended thinking handler for Claude models on AWS Bedrock
+//! Extended thinking handler for Claude models on AWS Bedrock - OpenAI compatible
 //! Routes to reasoning handler for DeepSeek R1
 
 use crate::domain::chat::{get_model_capabilities, ChatRequest, Content, ContentBlock};
 use crate::domain::logging::ClickHouseLogger;
-use crate::infrastructure::bedrock::invoke::{
+use crate::infrastructure::aws::bedrock::invoke::{
     build_thinking_request, invoke_thinking_model, parse_thinking_params,
 };
-use crate::interface::chat::chat_handler;
-use crate::interface::chat::reasoning_handler::chat_with_reasoning_handler;
+use super::chat_handler;
+use super::reasoning_handler::chat_with_reasoning_handler;
 use crate::shared::app_state::AppState;
 use crate::shared::logging::spawn_log;
 

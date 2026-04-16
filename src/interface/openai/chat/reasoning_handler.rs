@@ -1,9 +1,9 @@
-//! Reasoning handler for DeepSeek R1 and similar models on AWS Bedrock
+//! Reasoning handler for DeepSeek R1 and similar models on AWS Bedrock - OpenAI compatible
 //! Uses Converse API but processes reasoningContent from responses
 
 use crate::domain::chat::{ChatRequest, Content, ContentBlock};
 use crate::domain::logging::ClickHouseLogger;
-use crate::infrastructure::bedrock::converse::build_converse_payload;
+use crate::infrastructure::aws::bedrock::converse::build_converse_payload;
 use crate::shared::app_state::AppState;
 use crate::shared::logging::spawn_log;
 

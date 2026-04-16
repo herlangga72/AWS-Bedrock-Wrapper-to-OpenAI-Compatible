@@ -307,7 +307,7 @@ impl CloudflareClient {
     }
 
     /// Build thinking/thoughts params for Cloudflare AI models
-    fn build_thinking_params(req: &ChatRequest) -> (Option<CfThinking>, Option<CfThoughts>) {
+    fn build_thinking_params(&self, req: &ChatRequest) -> (Option<CfThinking>, Option<CfThoughts>) {
         // Check if thinking is enabled in the request
         let thinking_enabled = req
             .thinking

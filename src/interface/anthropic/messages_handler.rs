@@ -33,10 +33,10 @@ use crate::domain::chat::anthropic_types::{
     AnthropicMessagesRequest, AnthropicReasoningBlock, AnthropicResponse,
     AnthropicResponseBlock, AnthropicUsage,
 };
-use crate::infrastructure::bedrock::invoke::ThinkingResponse;
 use crate::domain::logging::ClickHouseLogger;
-use crate::infrastructure::anthropic_translator::{
-    anthropic_model_to_bedrock, build_thinking_request_from_anthropic, ConversePayload,
+use crate::infrastructure::aws::bedrock::{
+    anthropic_model_to_bedrock, build_thinking_request_from_anthropic,
+    AnthropicConversePayload, ThinkingResponse,
 };
 use crate::shared::app_state::AppState;
 use crate::shared::constants::REQUEST_TIMEOUT_CHAT;
@@ -135,7 +135,7 @@ async fn non_stream(
     logger: Arc<ClickHouseLogger>,
 ) -> Response {
     let model_id = anthropic_model_to_bedrock(&req.model);
-    let payload = ConversePayload::from_anthropic_request(&req);
+    let payload = AnthropicConversePayload::from_anthropic_request(&req);
 
     let sdk_call = client
         .converse()
@@ -198,7 +198,7 @@ fn stream_converse(
     user_email: String,
     _message_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
-    let payload = ConversePayload::from_anthropic_request(&req);
+    let payload = AnthropicConversePayload::from_anthropic_request(&req);
     async_stream::stream! {
         let sdk_call = client.converse_stream()
             .model_id(&model_id)

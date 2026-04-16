@@ -1,13 +1,13 @@
-//! Infrastructure layer - External integrations
+//! Infrastructure layer - External integrations organized by provider
 //!
-//! Contains implementations for:
-//! - `bedrock` - AWS Bedrock runtime and management clients
-//! - `cloudflare` - Cloudflare Workers AI client
-//! - `persistence` - SQLite auth, ClickHouse logging
-//! - `cache` - File-based caching
+//! Structure:
+//! - `aws/` - AWS services (Bedrock runtime, management)
+//!   - `bedrock/` - Bedrock Converse API, Invoke API, and Anthropic-to-Bedrock translation
+//! - `cloudflare/` - Cloudflare Workers AI client
+//! - `cache/` - File-based caching
+//! - `persistence/` - SQLite, ClickHouse (reserved)
 
-pub mod anthropic_translator;
-pub mod bedrock;
+pub mod aws;
 pub mod cache;
 pub mod cloudflare;
 pub mod persistence;
